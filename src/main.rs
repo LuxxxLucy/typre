@@ -362,18 +362,30 @@ fn frame(
     let mut ops = vec![RenderOp::ClearImages, RenderOp::MoveTo(0, 0)];
     ops.extend(wbody);
     ops.extend(status_bar(term, idx, total, meta));
-    if scroll > 0 {
-        ops.push(RenderOp::MoveTo(term.cols.saturating_sub(2), 0));
-        ops.push(RenderOp::Text("▲".to_string(), dim_style()));
-    }
-    if scroll + vp < height {
-        ops.push(RenderOp::MoveTo(
-            term.cols.saturating_sub(2),
-            vp.saturating_sub(1) as u16,
-        ));
-        ops.push(RenderOp::Text("▼".to_string(), dim_style()));
-    }
+    ops.extend(scrollbar(term, scroll, vp, height));
     Frame { ops, hits, height }
+}
+
+// A vertical scrollbar on the right column: a track with a thumb sized to the
+// visible fraction and positioned by the scroll offset. Empty when all fits.
+fn scrollbar(term: &TermInfo, scroll: usize, vp: usize, height: usize) -> Vec<RenderOp> {
+    if height <= vp || vp == 0 {
+        return Vec::new();
+    }
+    let col = term.cols.saturating_sub(1);
+    let thumb = (vp * vp / height).clamp(1, vp);
+    let pos = scroll * (vp - thumb) / (height - vp);
+    let mut ops = Vec::new();
+    for r in 0..vp {
+        let (ch, style) = if r >= pos && r < pos + thumb {
+            ("█", Style::default())
+        } else {
+            ("░", dim_style())
+        };
+        ops.push(RenderOp::MoveTo(col, r as u16));
+        ops.push(RenderOp::Text(ch.to_string(), style));
+    }
+    ops
 }
 
 // Keep only body rows [scroll, scroll+vp); shift hit rows to match.
