@@ -1,6 +1,9 @@
+use std::cell::RefCell;
+use std::collections::HashMap;
 use std::fs;
 use std::io::Write;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::rc::Rc;
 use std::sync::atomic::{AtomicU32, Ordering};
 
 use anyhow::Result;
@@ -121,9 +124,25 @@ fn emit_link(out: &mut impl Write, label: &str, url: &str, style: Style) -> Resu
 
 // Kitty graphics protocol: transmit the PNG (f=100) and place it at the cursor
 // (a=T) sized c=cols,r=rows with C=1 to suppress cursor move.
+// Base64-encoded PNG bytes, cached by path. Cache paths are content-hashed, so the
+// encoding is stable for the process and the file is read and encoded only once.
+fn encoded_png(png_path: &Path) -> Result<Rc<str>> {
+    thread_local! {
+        static CACHE: RefCell<HashMap<PathBuf, Rc<str>>> = RefCell::new(HashMap::new());
+    }
+    if let Some(b64) = CACHE.with(|c| c.borrow().get(png_path).cloned()) {
+        return Ok(b64);
+    }
+    let b64: Rc<str> = base64::engine::general_purpose::STANDARD
+        .encode(fs::read(png_path)?)
+        .into();
+    CACHE.with(|c| c.borrow_mut().insert(png_path.to_path_buf(), Rc::clone(&b64)));
+    Ok(b64)
+}
+
 fn emit_image(out: &mut impl Write, png_path: &Path, cols: u16, rows: u16) -> Result<()> {
     let id = IMAGE_ID.fetch_add(1, Ordering::Relaxed);
-    let b64 = base64::engine::general_purpose::STANDARD.encode(fs::read(png_path)?);
+    let b64 = encoded_png(png_path)?;
     transmit_chunks(
         out,
         &b64,
@@ -136,7 +155,7 @@ fn emit_image(out: &mut impl Write, png_path: &Path, cols: u16, rows: u16) -> Re
 // foreground color and the row/column index in combining diacritics.
 fn emit_inline_image(out: &mut impl Write, png_path: &Path, cols: u16) -> Result<()> {
     let id = IMAGE_ID.fetch_add(1, Ordering::Relaxed);
-    let b64 = base64::engine::general_purpose::STANDARD.encode(fs::read(png_path)?);
+    let b64 = encoded_png(png_path)?;
     transmit_chunks(out, &b64, &format!("\x1b_Gf=100,a=t,t=d,i={id},q=2"))?;
     write!(out, "\x1b_Ga=p,U=1,i={id},c={cols},r=1,q=2\x1b\\")?;
     emit_placeholder_row(out, id, cols)

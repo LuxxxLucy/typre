@@ -19,6 +19,13 @@ pub struct Slide {
     pub toc: Vec<TocEntry>,
 }
 
+impl Slide {
+    // A title slide leads with an H1; a normal slide leads with an H2.
+    pub fn is_title(&self) -> bool {
+        matches!(self.blocks.first(), Some(Block::Heading(1, _)))
+    }
+}
+
 // One table-of-contents line: the section title and the slide it jumps to.
 #[derive(Debug, Clone)]
 pub struct TocEntry {

@@ -5,8 +5,8 @@ use std::process::Command;
 use anyhow::{bail, Context, Result};
 
 use crate::core::ir::{RenderOp, Style, Width};
-use crate::layout::{natural_ppi, TermInfo, FOOTER_RESERVE};
-use crate::render::paint::{advance_rows, current_row, image_cells, indent_op};
+use crate::layout::{natural_ppi, TermInfo};
+use crate::render::paint::place_image;
 
 use super::{brace_cmd, Frag};
 
@@ -80,13 +80,7 @@ pub(crate) fn render_block(
 ) {
     match render_fragment(src, deck_dir, natural_ppi(term), true) {
         Ok(png_path) => {
-            let avail = (term.rows as usize)
-                .saturating_sub(current_row(ops))
-                .saturating_sub(FOOTER_RESERVE);
-            let (cols, rows) = image_cells(&png_path, term, indent, width, avail);
-            ops.push(indent_op(indent));
-            ops.push(RenderOp::Image { png_path, cols, rows });
-            advance_rows(ops, rows);
+            place_image(ops, png_path, term, indent, width);
         }
         Err(e) => {
             ops.push(RenderOp::Text(

@@ -1,12 +1,10 @@
 use std::path::Path;
 
 use crate::core::ir::{Align, Block, Inline, RenderOp, Style, Width};
-use crate::layout::{TermInfo, FOOTER_RESERVE};
+use crate::layout::TermInfo;
 use crate::commands;
 use crate::render::inline::{disp_width, emit_inlines, flat_text, uppercase_inlines};
-use crate::render::paint::{
-    advance_rows, code_style, current_row, heading_style, image_cells, indent_op, pad,
-};
+use crate::render::paint::{code_style, heading_style, indent_op, pad, place_image};
 
 pub(crate) fn emit_block(
     block: &Block,
@@ -72,18 +70,8 @@ pub(crate) fn emit_block(
         }
         Block::Image { src, alt } => {
             let png_path = deck_dir.join(src);
-            ops.push(indent_op(indent));
             if png_path.exists() {
-                let avail = (term.rows as usize)
-                    .saturating_sub(current_row(ops))
-                    .saturating_sub(FOOTER_RESERVE);
-                let (cols, rows) = image_cells(&png_path, term, indent, Width::Natural, avail);
-                ops.push(RenderOp::Image {
-                    png_path,
-                    cols,
-                    rows,
-                });
-                advance_rows(ops, rows);
+                let (cols, _) = place_image(ops, png_path, term, indent, Width::Natural);
                 if !alt.is_empty() {
                     ops.push(indent_op(indent));
                     ops.push(RenderOp::Text(
@@ -96,6 +84,7 @@ pub(crate) fn emit_block(
                     ops.push(RenderOp::LineBreak);
                 }
             } else {
+                ops.push(indent_op(indent));
                 ops.push(RenderOp::Text(format!("[image: {alt}]"), Style::default()));
                 ops.push(RenderOp::LineBreak);
             }

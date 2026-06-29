@@ -363,7 +363,7 @@ fn attach_toc(deck: &mut Deck) {
         })
         .collect();
     if let Some(first) = deck.slides.first_mut() {
-        if matches!(first.blocks.first(), Some(Block::Heading(1, _))) {
+        if first.is_title() {
             first.toc = entries;
         }
     }

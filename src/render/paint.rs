@@ -1,8 +1,10 @@
 // Drawing vocabulary: click targets, render-op helpers, styles, and box rules.
-use std::path::Path;
+use std::cell::RefCell;
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 
 use crate::core::ir::{Align, RenderOp, Style, Width};
-use crate::layout::TermInfo;
+use crate::layout::{viewport, TermInfo};
 
 // A left-click target: the screen row, the column span it covers, and what the
 // click does.
@@ -51,7 +53,7 @@ pub(crate) fn image_cells(
 ) -> (u16, u16) {
     let cell_w = term.cell_w_px.max(1) as f32;
     let cell_h = term.cell_h_px.max(1) as f32;
-    let (w, h) = image::image_dimensions(png_path).unwrap_or((cell_w as u32, cell_h as u32));
+    let (w, h) = image_dims(png_path).unwrap_or((cell_w as u32, cell_h as u32));
     let nat_cols = (w as f32 / cell_w).max(1.0);
     let nat_rows = (h as f32 / cell_h).max(1.0);
     let content_w = (term.cols as usize).saturating_sub(indent).max(1) as f32;
@@ -67,6 +69,36 @@ pub(crate) fn image_cells(
     }
     let cols = (nat_cols * scale).round().max(1.0) as u16;
     let rows = (nat_rows * scale).round().max(1.0) as u16;
+    (cols, rows)
+}
+
+// Image pixel dimensions, memoized. PNG cache paths are content-hashed, so a path
+// maps to fixed bytes for the process lifetime and never needs re-reading.
+pub(crate) fn image_dims(png_path: &Path) -> Option<(u32, u32)> {
+    thread_local! {
+        static CACHE: RefCell<HashMap<PathBuf, (u32, u32)>> = RefCell::new(HashMap::new());
+    }
+    if let Some(d) = CACHE.with(|c| c.borrow().get(png_path).copied()) {
+        return Some(d);
+    }
+    let d = image::image_dimensions(png_path).ok()?;
+    CACHE.with(|c| c.borrow_mut().insert(png_path.to_path_buf(), d));
+    Some(d)
+}
+
+// Size a block image, place it at the indent, and advance past its rows.
+pub(crate) fn place_image(
+    ops: &mut Vec<RenderOp>,
+    png_path: PathBuf,
+    term: &TermInfo,
+    indent: usize,
+    width: Width,
+) -> (u16, u16) {
+    let avail = viewport(term).saturating_sub(current_row(ops));
+    let (cols, rows) = image_cells(&png_path, term, indent, width, avail);
+    ops.push(indent_op(indent));
+    ops.push(RenderOp::Image { png_path, cols, rows });
+    advance_rows(ops, rows);
     (cols, rows)
 }
 
