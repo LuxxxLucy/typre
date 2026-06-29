@@ -1,0 +1,16 @@
+[package]
+name = "typre"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+pulldown-cmark = "0.13"
+crossterm = "0.29"
+image = "0.25"
+notify = "8"
+anyhow = "1.0"
+thiserror = "2.0"
+blake3 = "1.8"
+tempfile = "3"
+base64 = "0.22"
+clap = { version = "4", features = ["derive"] }
