@@ -82,6 +82,17 @@ pub(crate) fn emit_block(
                     rows,
                 });
                 advance_rows(ops, rows);
+                if !alt.is_empty() {
+                    ops.push(indent_op(indent));
+                    ops.push(RenderOp::Text(
+                        pad(alt, cols as usize, Align::Center),
+                        Style {
+                            italic: true,
+                            ..Style::default()
+                        },
+                    ));
+                    ops.push(RenderOp::LineBreak);
+                }
             } else {
                 ops.push(RenderOp::Text(format!("[image: {alt}]"), Style::default()));
                 ops.push(RenderOp::LineBreak);
