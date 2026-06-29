@@ -422,7 +422,8 @@ fn scrollbar(term: &TermInfo, scroll: usize, vp: usize, height: usize) -> Vec<Re
     if height <= vp || vp == 0 {
         return Vec::new();
     }
-    let col = term.cols.saturating_sub(1);
+    let (margin, content_w) = layout(term);
+    let col = (margin + content_w).min(term.cols.saturating_sub(1) as usize) as u16;
     let thumb = (vp * vp / height).clamp(1, vp);
     let pos = scroll * (vp - thumb) / (height - vp);
     let mut ops = Vec::new();
