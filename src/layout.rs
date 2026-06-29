@@ -8,7 +8,6 @@ pub struct TermInfo {
 }
 
 impl TermInfo {
-    // Same display geometry at a different usable width (the body's right edge).
     pub(crate) fn with_cols(&self, cols: usize) -> TermInfo {
         TermInfo {
             cols: cols as u16,

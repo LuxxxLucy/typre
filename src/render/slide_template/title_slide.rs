@@ -55,7 +55,6 @@ pub(crate) fn render(
     ));
     ops.push(RenderOp::LineBreak);
 
-    // section list directly below the box, before the rest of the body
     let mut hits = emit_toc(&slide.toc, content_w, margin, &mut ops);
 
     let body = term.with_cols(margin + content_w);

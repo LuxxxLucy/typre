@@ -6,8 +6,6 @@ use std::path::{Path, PathBuf};
 use crate::core::ir::{Align, RenderOp, Style, Width};
 use crate::layout::{viewport, TermInfo};
 
-// A left-click target: the screen row, the column span it covers, and what the
-// click does.
 #[derive(Debug)]
 pub struct Hit {
     pub row: u16,
@@ -86,7 +84,6 @@ pub(crate) fn image_dims(png_path: &Path) -> Option<(u32, u32)> {
     Some(d)
 }
 
-// Size a block image, place it at the indent, and advance past its rows.
 pub(crate) fn place_image(
     ops: &mut Vec<RenderOp>,
     png_path: PathBuf,

@@ -219,7 +219,6 @@ fn emit_table(
     };
 
     push_line(border('┌', '┬', '┐'), ops);
-    // header row, bold
     ops.push(RenderOp::Text(pre.clone(), Style::default()));
     for c in 0..ncol {
         ops.push(RenderOp::Text("│ ".to_string(), Style::default()));

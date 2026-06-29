@@ -154,7 +154,6 @@ impl Nav {
         self.len - 1
     }
 
-    // Apply a movement command; returns whether the page changed (so the caller redraws).
     fn apply(&mut self, cmd: Command) -> bool {
         let prev = self.page;
         match cmd {
@@ -177,7 +176,6 @@ impl Nav {
         self.page != prev
     }
 
-    // Jump to a page (clamped); returns whether the page changed.
     fn goto(&mut self, page: usize) -> bool {
         let prev = self.page;
         self.page = page.min(self.last());

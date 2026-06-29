@@ -9,8 +9,6 @@ use std::path::Path;
 use crate::core::ir::{RenderOp, Slide};
 use crate::layout::TermInfo;
 
-// The slide body: ops, click targets, total height (everything render needs is
-// already determined by the caller — resolution, open state, slide kind).
 pub use slide_template::render as body;
 
 // Full-frame body with all details closed (used by --dump-ops / snapshot).
