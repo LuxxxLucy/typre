@@ -83,7 +83,17 @@ fn inline_tokens(inls: &[Inline], base: Style, term: &TermInfo, deck_dir: &Path)
     for inl in inls {
         match inl {
             Inline::Text(t, s) => push_words(&mut toks, t, merge(base, *s)),
-            Inline::Code(t) => push_words(&mut toks, t, base),
+            Inline::Code(t) => push_words(
+                &mut toks,
+                t,
+                merge(
+                    base,
+                    Style {
+                        code: true,
+                        ..Style::default()
+                    },
+                ),
+            ),
             Inline::Link { label, url } => toks.push(Tok::Link {
                 label: label.clone(),
                 url: url.clone(),
