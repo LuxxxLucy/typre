@@ -17,6 +17,7 @@ pub struct Hit {
 pub enum HitAction {
     ToggleDetails(usize),
     OpenUrl(String),
+    Goto(usize),
 }
 
 pub(crate) fn indent_op(indent: usize) -> RenderOp {

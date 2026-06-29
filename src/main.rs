@@ -25,7 +25,7 @@ use crossterm::terminal::{
 use crossterm::{cursor, execute, queue, terminal};
 use notify::{RecursiveMode, Watcher};
 
-use crate::core::ir::{Align, Deck, Meta, RenderOp, Style};
+use crate::core::ir::{Align, Block, Deck, Meta, RenderOp, Style, TocEntry};
 use crate::core::{ir, parse};
 use crate::layout::{layout, viewport, TermInfo};
 use crate::precompile::typst_precompile_errors;
@@ -52,7 +52,7 @@ fn main() -> Result<()> {
     let md =
         fs::read_to_string(&cli.deck).with_context(|| format!("read {}", cli.deck.display()))?;
     let deck_dir = deck_dir_of(&cli.deck);
-    let deck = parse::parse(&md);
+    let deck = build_deck(&md);
 
     if cli.dump_ops {
         return dump_ops(&deck, &deck_dir);
@@ -173,6 +173,14 @@ impl Nav {
             }
             Command::ToggleHelp | Command::Cancel | Command::Quit | Command::Ignore => return false,
         }
+        self.pending = None;
+        self.page != prev
+    }
+
+    // Jump to a page (clamped); returns whether the page changed.
+    fn goto(&mut self, page: usize) -> bool {
+        let prev = self.page;
+        self.page = page.min(self.last());
         self.pending = None;
         self.page != prev
     }
@@ -328,6 +336,35 @@ struct Frame {
     height: usize,
 }
 
+// Parse and run the deck-level prepare pass that the IR needs before rendering.
+fn build_deck(md: &str) -> Deck {
+    let mut deck = parse::parse(md);
+    attach_toc(&mut deck);
+    deck
+}
+
+// Populate the opening title slide's table of contents with every section slide
+// (those leading with an H2) and the slide index each jumps to.
+fn attach_toc(deck: &mut Deck) {
+    let entries: Vec<TocEntry> = deck
+        .slides
+        .iter()
+        .enumerate()
+        .filter_map(|(i, s)| match s.blocks.first() {
+            Some(Block::Heading(2, inls)) => Some(TocEntry {
+                index: i,
+                title: crate::render::inline::flat_text(inls),
+            }),
+            _ => None,
+        })
+        .collect();
+    if let Some(first) = deck.slides.first_mut() {
+        if matches!(first.blocks.first(), Some(Block::Heading(1, _))) {
+            first.toc = entries;
+        }
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn frame(
     slide: &ir::Slide,
@@ -453,7 +490,7 @@ fn run(deck_path: &Path) -> Result<()> {
 }
 
 fn load(deck_path: &Path) -> Deck {
-    parse::parse(&fs::read_to_string(deck_path).unwrap_or_default())
+    build_deck(&fs::read_to_string(deck_path).unwrap_or_default())
 }
 
 // Compile every slide's typst up front behind a loading frame. If any fragment
@@ -604,6 +641,12 @@ fn present(deck_path: &Path, deck_dir: &Path, out: &mut impl Write) -> Result<()
                                 dirty = true;
                             }
                             Some(HitAction::OpenUrl(url)) => open_url(&url),
+                            Some(HitAction::Goto(idx)) => {
+                                if nav.goto(idx) {
+                                    scroll = 0;
+                                    dirty = true;
+                                }
+                            }
                             None => {}
                         }
                     }
@@ -810,5 +853,18 @@ mod tests {
         assert!(ops_text(&top.ops).contains("row001"));
         let down = frame(slide, &t, Path::new("."), 0, 1, &Meta::default(), &HashSet::new(), 6);
         assert!(!ops_text(&down.ops).contains("row001"), "scrolled past the first rows");
+    }
+
+    #[test]
+    fn title_slide_lists_sections_as_jump_targets() {
+        let deck = build_deck("# Talk\n\n## Alpha\n\na\n\n## Beta\n\nb\n");
+        assert_eq!(deck.slides[0].toc.len(), 2, "two section slides");
+        assert_eq!(deck.slides[0].toc[1].index, 2, "Beta is slide 2");
+        assert_eq!(deck.slides[0].toc[1].title, "Beta");
+        let f = frame(&deck.slides[0], &term(), Path::new("."), 0, 3, &Meta::default(), &HashSet::new(), 0);
+        assert!(
+            f.hits.iter().any(|h| matches!(h.action, HitAction::Goto(2))),
+            "a contents line jumps to its section",
+        );
     }
 }

@@ -12,9 +12,18 @@ pub struct Meta {
     pub author: Option<String>,
 }
 
+// `toc` is non-empty only on a title slide that opens the deck: its section list.
 #[derive(Debug, Default)]
 pub struct Slide {
     pub blocks: Vec<Block>,
+    pub toc: Vec<TocEntry>,
+}
+
+// One table-of-contents line: the section title and the slide it jumps to.
+#[derive(Debug, Clone)]
+pub struct TocEntry {
+    pub index: usize,
+    pub title: String,
 }
 
 #[derive(Debug, Clone)]

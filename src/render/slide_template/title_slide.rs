@@ -1,13 +1,18 @@
 use std::path::Path;
 
-use crate::core::ir::{Block, Inline, RenderOp, Slide, Style};
+use crate::core::ir::{Block, Inline, RenderOp, Slide, Style, TocEntry};
 use crate::layout::{layout, TermInfo};
-use crate::render::inline::{disp_width, emit_inlines, uppercase_inlines};
-use crate::render::paint::{dim_style, heading_style, hrule};
+use crate::render::inline::{disp_width, emit_inlines, link_hits, uppercase_inlines};
+use crate::render::paint::{current_row, dim_style, heading_style, hrule, indent_op, Hit, HitAction};
 
 // Title slide: the heading sits in a bordered box at the normal slide margin and
 // width; paragraphs render below the box as ordinary left-aligned dim text.
-pub(crate) fn render(slide: &Slide, term: &TermInfo, deck_dir: &Path) -> Vec<RenderOp> {
+// The opening title slide also lists the deck's sections (slide.toc) as jump links.
+pub(crate) fn render(
+    slide: &Slide,
+    term: &TermInfo,
+    deck_dir: &Path,
+) -> (Vec<RenderOp>, Vec<Hit>) {
     let (margin, content_w) = layout(term);
     let inner = content_w.saturating_sub(4);
     let pre = " ".repeat(margin);
@@ -45,7 +50,41 @@ pub(crate) fn render(slide: &Slide, term: &TermInfo, deck_dir: &Path) -> Vec<Ren
         emit_inlines(inls, dim_style(), term, deck_dir, margin, margin, &mut ops);
         ops.push(RenderOp::LineBreak);
     }
-    ops
+
+    let mut hits = emit_toc(&slide.toc, content_w, margin, &mut ops);
+    hits.extend(link_hits(&ops));
+    (ops, hits)
+}
+
+// The table of contents: a "Contents" label then one clickable line per section,
+// numbered by its slide. Each line is a Goto hit covering its text.
+fn emit_toc(toc: &[TocEntry], content_w: usize, margin: usize, ops: &mut Vec<RenderOp>) -> Vec<Hit> {
+    let mut hits = Vec::new();
+    if toc.is_empty() {
+        return hits;
+    }
+    ops.push(RenderOp::LineBreak);
+    ops.push(indent_op(margin));
+    ops.push(RenderOp::Text("CONTENTS".to_string(), heading_style()));
+    ops.push(RenderOp::LineBreak);
+    for (n, entry) in toc.iter().enumerate() {
+        let label: String = format!("{}.  {}", n + 1, entry.title)
+            .chars()
+            .take(content_w)
+            .collect();
+        let row = current_row(ops) as u16;
+        let start = margin as u16;
+        let end = start + label.chars().count() as u16;
+        ops.push(indent_op(margin));
+        ops.push(RenderOp::Text(label, dim_style()));
+        ops.push(RenderOp::LineBreak);
+        hits.push(Hit {
+            row,
+            cols: start..end,
+            action: HitAction::Goto(entry.index),
+        });
+    }
+    hits
 }
 
 // Split an inline run into visual lines at soft/hard breaks.
