@@ -49,7 +49,12 @@ pub(crate) fn emit_block(
         Block::List { ordered, items } => {
             emit_list(*ordered, items, "", term, deck_dir, indent, ops);
         }
-        Block::Code { src } => {
+        Block::Code { src, lang } => {
+            if let Some(lang) = lang {
+                ops.push(indent_op(indent));
+                ops.push(RenderOp::Text(format!(" {lang} "), code_label_style()));
+                ops.push(RenderOp::LineBreak);
+            }
             let w = (term.cols as usize).saturating_sub(indent);
             for line in src.lines() {
                 ops.push(indent_op(indent));
@@ -107,6 +112,14 @@ pub(crate) fn emit_block(
 fn code_style() -> Style {
     Style {
         code: true,
+        ..Style::default()
+    }
+}
+
+fn code_label_style() -> Style {
+    Style {
+        code: true,
+        bold: true,
         ..Style::default()
     }
 }

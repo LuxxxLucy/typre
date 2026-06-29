@@ -27,6 +27,7 @@ pub enum Block {
     },
     Code {
         src: String,
+        lang: Option<String>,
     },
     BlockTypst {
         src: String,

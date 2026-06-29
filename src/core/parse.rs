@@ -1,4 +1,4 @@
-use pulldown_cmark::{Alignment, Event, HeadingLevel, Options, Parser, Tag, TagEnd};
+use pulldown_cmark::{Alignment, CodeBlockKind, Event, HeadingLevel, Options, Parser, Tag, TagEnd};
 
 use crate::commands::{parse_command, Frag};
 use crate::core::ir::{Align, Block, Deck, Inline, Meta, Slide, Style};
@@ -22,6 +22,7 @@ pub fn parse(md: &str) -> Deck {
     let mut heading_level: Option<u8> = None;
     let mut in_code = false;
     let mut code_buf = String::new();
+    let mut code_lang: Option<String> = None;
     let mut in_metadata = false;
     let mut meta_buf = String::new();
     let mut pending_image: Option<(String, String)> = None;
@@ -105,9 +106,17 @@ pub fn parse(md: &str) -> Deck {
                 }
             }
 
-            Event::Start(Tag::CodeBlock(_)) => {
+            Event::Start(Tag::CodeBlock(kind)) => {
                 in_code = true;
                 code_buf.clear();
+                code_lang = match kind {
+                    CodeBlockKind::Fenced(info) => info
+                        .split_whitespace()
+                        .next()
+                        .filter(|s| !s.is_empty())
+                        .map(str::to_string),
+                    CodeBlockKind::Indented => None,
+                };
             }
             Event::End(TagEnd::CodeBlock) => {
                 in_code = false;
@@ -115,7 +124,8 @@ pub fn parse(md: &str) -> Deck {
                 if src.ends_with('\n') {
                     src.pop();
                 }
-                push_block(&mut block_stack, Block::Code { src });
+                let lang = code_lang.take();
+                push_block(&mut block_stack, Block::Code { src, lang });
             }
 
             Event::Start(Tag::Image { dest_url, .. }) => {
@@ -570,8 +580,9 @@ mod tests {
     fn code_block_parsed() {
         let deck = parse("```rust\nfn main() {}\n```\n");
         match &deck.slides[0].blocks[0] {
-            Block::Code { src } => {
+            Block::Code { src, lang } => {
                 assert_eq!(src, "fn main() {}");
+                assert_eq!(lang.as_deref(), Some("rust"));
             }
             other => panic!("expected code, got {other:?}"),
         }
