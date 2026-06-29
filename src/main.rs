@@ -194,38 +194,49 @@ impl Nav {
 
 // Status bar and overlays: the non-content screen furniture.
 
-// Bottom status bar: separator, left metadata, "? help", and the slide counter.
-fn status_bar(term: &TermInfo, idx: usize, total: usize, meta: &Meta) -> Vec<RenderOp> {
+// Bottom status bar: separator, a "Contents" button, metadata, "? help", and the
+// slide counter. The returned hit makes the button jump to the title slide.
+fn status_bar(term: &TermInfo, idx: usize, total: usize, meta: &Meta) -> (Vec<RenderOp>, Hit) {
     let (margin, content_w) = layout(term);
     let rows = term.rows as usize;
     let mx = margin as u16;
+    let row = rows.saturating_sub(1) as u16;
     let dim = dim_style();
+    let bold = Style {
+        bold: true,
+        ..Style::default()
+    };
     let mut ops = vec![
         RenderOp::MoveTo(mx, rows.saturating_sub(2) as u16),
         RenderOp::Text("─".repeat(content_w), dim),
-        RenderOp::MoveTo(mx, rows.saturating_sub(1) as u16),
+        RenderOp::MoveTo(mx, row),
     ];
-    let left = match (&meta.title, &meta.author) {
-        (Some(t), Some(a)) => format!("{t} — {a}"),
-        (Some(t), None) => t.clone(),
-        (None, Some(a)) => a.clone(),
+    let button = "⌂ Contents";
+    let meta_text = match (&meta.title, &meta.author) {
+        (Some(t), Some(a)) => format!("   {t} — {a}"),
+        (Some(t), None) => format!("   {t}"),
+        (None, Some(a)) => format!("   {a}"),
         _ => String::new(),
     };
     let hint = "? help";
     let right = format!("{} / {}", idx + 1, total);
-    let used = left.chars().count() + hint.chars().count() + right.chars().count() + 4;
+    let used = button.chars().count()
+        + meta_text.chars().count()
+        + hint.chars().count()
+        + right.chars().count()
+        + 4;
     let gap = content_w.saturating_sub(used).max(1);
-    ops.push(RenderOp::Text(left, dim));
+    ops.push(RenderOp::Text(button.to_string(), bold));
+    ops.push(RenderOp::Text(meta_text, dim));
     ops.push(RenderOp::Text(" ".repeat(gap), Style::default()));
     ops.push(RenderOp::Text(format!("{hint}    "), dim));
-    ops.push(RenderOp::Text(
-        right,
-        Style {
-            bold: true,
-            ..Style::default()
-        },
-    ));
-    ops
+    ops.push(RenderOp::Text(right, bold));
+    let hit = Hit {
+        row,
+        cols: mx..mx + button.chars().count() as u16,
+        action: HitAction::Goto(0),
+    };
+    (ops, hit)
 }
 
 // A centered, bordered box; each line carries its own style.
@@ -395,10 +406,12 @@ fn frame(
         );
     let vp = viewport(term);
     let scroll = scroll.min(height.saturating_sub(vp));
-    let (wbody, hits) = window(body, hits, scroll, vp);
+    let (wbody, mut hits) = window(body, hits, scroll, vp);
     let mut ops = vec![RenderOp::ClearImages, RenderOp::MoveTo(0, 0)];
     ops.extend(wbody);
-    ops.extend(status_bar(term, idx, total, meta));
+    let (bar, home) = status_bar(term, idx, total, meta);
+    ops.extend(bar);
+    hits.push(home);
     ops.extend(scrollbar(term, scroll, vp, height));
     Frame { ops, hits, height }
 }
@@ -830,7 +843,12 @@ mod tests {
             &HashSet::new(),
             0,
         );
-        assert_eq!(closed.hits.len(), 1, "summary is a click target");
+        let toggles = closed
+            .hits
+            .iter()
+            .filter(|h| matches!(h.action, HitAction::ToggleDetails(_)))
+            .count();
+        assert_eq!(toggles, 1, "summary is a click target");
         let txt = ops_text(&closed.ops);
         assert!(txt.contains('▸') && !txt.contains("body line"), "closed hides body");
 
