@@ -8,6 +8,21 @@ author: luxxxlucy
 A Rust terminal slideshow.
 Mainly Markdown syntax, but provide extra command interfaces.
 
+## Features
+
+Markdown plus extras, at a glance: **bold**, _italic_, `inline code`, and inline math like ◊typst{e^(i pi) + 1 = 0} at text height.
+
+```rust
+fn main() {
+    println!("hello from typre");
+}
+```
+
+◊details[A collapsible details block]{
+Click the summary to expand it.
+A second line of detail.
+}
+
 ## Text, lists, code
 
 **bold**, _italic_, `inline code`.
@@ -93,7 +108,7 @@ The same fragment, scaled to 70% of the content column:
 └───────┘ └───────┘ └───────┘
 }
 
-## Charts and details
+## Charts
 
 ◊figure[Things I Have]{
     │                      ████ Usable
@@ -105,9 +120,4 @@ The same fragment, scaled to 70% of the content column:
  3  │  █  ░  █  ░
  0  └──▀─────▀─────▀────────────
      Socks Jeans Shirts USB
-}
-
-◊details[A short summary of the contents]{
-Hidden gems.
-A second line of detail.
 }
