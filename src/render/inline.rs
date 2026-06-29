@@ -87,7 +87,9 @@ fn inline_tokens(inls: &[Inline], base: Style, term: &TermInfo, deck_dir: &Path)
     for inl in inls {
         match inl {
             Inline::Text(t, s) => push_words(&mut toks, t, merge(base, *s)),
-            Inline::Code(t) => push_words(&mut toks, t, merge(base, code_style())),
+            // One contiguous chip with a space of padding each side, so the
+            // background reads like the code block's panel, not a bare word.
+            Inline::Code(t) => toks.push(Tok::Text(format!(" {t} "), merge(base, code_style()))),
             Inline::Link { label, url } => toks.push(Tok::Link {
                 label: label.clone(),
                 url: url.clone(),
