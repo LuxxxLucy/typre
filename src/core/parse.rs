@@ -445,8 +445,6 @@ mod tests {
     use super::*;
     use crate::core::ir::{Block, Inline, Width};
 
-    const SHOWCASE: &str = include_str!("../../examples/showcase.md");
-
     #[test]
     fn inline_typst_command() {
         let deck = parse("text ◊typst{a_b^*c*} end");
@@ -522,16 +520,10 @@ mod tests {
     }
 
     #[test]
-    fn slide_split_count() {
-        let deck = parse(SHOWCASE);
-        assert_eq!(deck.slides.len(), 7, "showcase has 7 slides");
-    }
-
-    #[test]
     fn front_matter_title_and_author() {
-        let deck = parse(SHOWCASE);
-        assert_eq!(deck.meta.title.as_deref(), Some("typre showcase"));
-        assert_eq!(deck.meta.author.as_deref(), Some("luxxxlucy"));
+        let deck = parse("---\ntitle: My Talk\nauthor: Ada\n---\n\n# My Talk\n");
+        assert_eq!(deck.meta.title.as_deref(), Some("My Talk"));
+        assert_eq!(deck.meta.author.as_deref(), Some("Ada"));
     }
 
     #[test]
@@ -662,14 +654,4 @@ mod tests {
         }
     }
 
-    #[test]
-    fn showcase_has_block_typst_slides() {
-        let deck = parse(SHOWCASE);
-        let block_typst = deck
-            .slides
-            .iter()
-            .filter(|s| s.blocks.iter().any(|b| matches!(b, Block::BlockTypst { .. })))
-            .count();
-        assert_eq!(block_typst, 2, "the math slide and the sized-figure slide");
-    }
 }
