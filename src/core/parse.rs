@@ -78,10 +78,7 @@ pub fn parse(md: &str) -> Deck {
 
             Event::Start(Tag::List(start)) => {
                 // Flush a tight item's own text before descending into its nested list.
-                let inl = std::mem::take(&mut inlines);
-                if !inl.is_empty() {
-                    push_block(&mut block_stack, Block::Paragraph(inl));
-                }
+                flush_paragraph(&mut block_stack, &mut inlines);
                 list_ordered.push(start.is_some());
             }
             Event::End(TagEnd::List(_)) => {
@@ -90,10 +87,7 @@ pub fn parse(md: &str) -> Deck {
             Event::Start(Tag::Item) => block_stack.push(Vec::new()),
             Event::End(TagEnd::Item) => {
                 // Flush accumulated inlines: tight items carry no Paragraph wrapper.
-                let inl = std::mem::take(&mut inlines);
-                if !inl.is_empty() {
-                    push_block(&mut block_stack, Block::Paragraph(inl));
-                }
+                flush_paragraph(&mut block_stack, &mut inlines);
                 let item = block_stack.pop().unwrap();
                 let ordered = *list_ordered.last().unwrap_or(&false);
                 let blocks = block_stack.last_mut().unwrap();
@@ -233,6 +227,13 @@ fn flush_slide(slides: &mut Vec<Slide>, block_stack: &mut Vec<Vec<Block>>) {
 
 fn push_block(stack: &mut [Vec<Block>], block: Block) {
     stack.last_mut().unwrap().push(block);
+}
+
+fn flush_paragraph(stack: &mut [Vec<Block>], inlines: &mut Vec<Inline>) {
+    let inl = std::mem::take(inlines);
+    if !inl.is_empty() {
+        push_block(stack, Block::Paragraph(inl));
+    }
 }
 
 struct TableBuilder {

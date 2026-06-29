@@ -49,15 +49,15 @@ struct Cli {
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
-    let md =
-        fs::read_to_string(&cli.deck).with_context(|| format!("read {}", cli.deck.display()))?;
     let deck_dir = deck_dir_of(&cli.deck);
-    let deck = build_deck(&md);
 
-    if cli.dump_ops {
-        return dump_ops(&deck, &deck_dir);
-    }
-    if cli.export {
+    if cli.dump_ops || cli.export {
+        let md = fs::read_to_string(&cli.deck)
+            .with_context(|| format!("read {}", cli.deck.display()))?;
+        let deck = build_deck(&md);
+        if cli.dump_ops {
+            return dump_ops(&deck, &deck_dir);
+        }
         return export(&deck, &deck_dir, cli.output.as_deref());
     }
     run(&cli.deck)
@@ -202,10 +202,7 @@ fn status_bar(term: &TermInfo, idx: usize, total: usize, meta: &Meta) -> (Vec<Re
     let mx = margin as u16;
     let row = rows.saturating_sub(1) as u16;
     let dim = dim_style();
-    let bold = Style {
-        bold: true,
-        ..Style::default()
-    };
+    let bold = heading_style();
     let mut ops = vec![
         RenderOp::MoveTo(mx, rows.saturating_sub(2) as u16),
         RenderOp::Text("─".repeat(content_w), dim),
@@ -241,7 +238,7 @@ fn status_bar(term: &TermInfo, idx: usize, total: usize, meta: &Meta) -> (Vec<Re
 
 // A centered, bordered box; each line carries its own style.
 fn centered_box(term: &TermInfo, lines: &[(String, Style)]) -> Vec<RenderOp> {
-    let w = lines.iter().map(|(l, _)| disp(l)).max().unwrap_or(0);
+    let w = lines.iter().map(|(l, _)| l.chars().count()).max().unwrap_or(0);
     let cols = term.cols as usize;
     let rows = term.rows as usize;
     let x = (cols.saturating_sub(w + 4) / 2) as u16;
@@ -324,16 +321,12 @@ fn error_gate(term: &TermInfo, errors: &[(usize, String)]) -> Vec<RenderOp> {
 }
 
 fn truncate(s: &str, max: usize) -> String {
-    if disp(s) <= max {
+    if s.chars().count() <= max {
         return s.to_string();
     }
     let mut out: String = s.chars().take(max.saturating_sub(1)).collect();
     out.push('…');
     out
-}
-
-fn disp(s: &str) -> usize {
-    s.chars().count()
 }
 
 // Frame composition: window the rendered body to the scroll offset and add the

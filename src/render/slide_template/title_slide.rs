@@ -7,35 +7,47 @@ use crate::render::inline::{disp_width, emit_inlines, link_hits, uppercase_inlin
 use crate::render::paint::{current_row, dim_style, heading_style, hrule, indent_op, Hit, HitAction};
 
 // Title slide: the heading sits in a bordered box at the normal slide margin and
-// width; every other block renders below the box like a normal slide body.
-// The opening title slide also lists the deck's sections (slide.toc) as jump links.
+// width. The opening title slide lists the deck's sections (slide.toc) as jump
+// links directly below the box, ahead of the rest of the body.
 pub(crate) fn render(
     slide: &Slide,
     term: &TermInfo,
     deck_dir: &Path,
 ) -> (Vec<RenderOp>, Vec<Hit>) {
     let (margin, content_w) = layout(term);
-    let inner = content_w.saturating_sub(4);
     let pre = " ".repeat(margin);
-    let mut ops = Vec::new();
 
+    // The box fits the widest title line, capped to the zen column.
+    let lines: Vec<Vec<Inline>> = slide
+        .blocks
+        .iter()
+        .filter_map(|b| match b {
+            Block::Heading(_, inls) => Some(uppercase_inlines(inls)),
+            _ => None,
+        })
+        .flat_map(|inls| split_breaks(&inls))
+        .collect();
+    let inner = lines
+        .iter()
+        .map(|l| disp_width(l))
+        .max()
+        .unwrap_or(0)
+        .min(content_w.saturating_sub(4))
+        .max(1);
+
+    let mut ops = Vec::new();
     ops.push(RenderOp::LineBreak); // top padding
     ops.push(RenderOp::Text(
         format!("{pre}{}", hrule('┌', inner + 2, '┐')),
         Style::default(),
     ));
     ops.push(RenderOp::LineBreak);
-    for block in &slide.blocks {
-        let Block::Heading(_, inls) = block else {
-            continue;
-        };
-        for line in split_breaks(&uppercase_inlines(inls)) {
-            ops.push(RenderOp::Text(format!("{pre}│ "), Style::default()));
-            emit_inlines(&line, heading_style(), term, deck_dir, 0, 0, &mut ops);
-            let slack = inner.saturating_sub(disp_width(&line));
-            ops.push(RenderOp::Text(format!("{} │", " ".repeat(slack)), Style::default()));
-            ops.push(RenderOp::LineBreak);
-        }
+    for line in &lines {
+        ops.push(RenderOp::Text(format!("{pre}│ "), Style::default()));
+        emit_inlines(line, heading_style(), term, deck_dir, 0, 0, &mut ops);
+        let slack = inner.saturating_sub(disp_width(line));
+        ops.push(RenderOp::Text(format!("{} │", " ".repeat(slack)), Style::default()));
+        ops.push(RenderOp::LineBreak);
     }
     ops.push(RenderOp::Text(
         format!("{pre}{}", hrule('└', inner + 2, '┘')),
@@ -43,12 +55,10 @@ pub(crate) fn render(
     ));
     ops.push(RenderOp::LineBreak);
 
-    let body = TermInfo {
-        cols: (margin + content_w) as u16,
-        rows: term.rows,
-        cell_w_px: term.cell_w_px,
-        cell_h_px: term.cell_h_px,
-    };
+    // section list directly below the box, before the rest of the body
+    let mut hits = emit_toc(&slide.toc, content_w, margin, &mut ops);
+
+    let body = term.with_cols(margin + content_w);
     for block in &slide.blocks {
         if matches!(block, Block::Heading(_, _)) {
             continue;
@@ -58,13 +68,12 @@ pub(crate) fn render(
         ops.push(RenderOp::LineBreak);
     }
 
-    let mut hits = emit_toc(&slide.toc, content_w, margin, &mut ops);
     hits.extend(link_hits(&ops));
     (ops, hits)
 }
 
-// The table of contents: a "Contents" label then one clickable line per section,
-// numbered by its slide. Each line is a Goto hit covering its text.
+// The table of contents: a "CONTENTS" label then one clickable line per section,
+// numbered in order. Each line is a Goto hit covering its text.
 fn emit_toc(toc: &[TocEntry], content_w: usize, margin: usize, ops: &mut Vec<RenderOp>) -> Vec<Hit> {
     let mut hits = Vec::new();
     if toc.is_empty() {

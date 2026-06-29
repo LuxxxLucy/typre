@@ -4,7 +4,9 @@ use crate::core::ir::{Align, Block, Inline, RenderOp, Style, Width};
 use crate::layout::{TermInfo, FOOTER_RESERVE};
 use crate::commands;
 use crate::render::inline::{disp_width, emit_inlines, flat_text, uppercase_inlines};
-use crate::render::paint::{advance_rows, current_row, heading_style, image_cells, indent_op, pad};
+use crate::render::paint::{
+    advance_rows, code_style, current_row, heading_style, image_cells, indent_op, pad,
+};
 
 pub(crate) fn emit_block(
     block: &Block,
@@ -120,18 +122,10 @@ pub(crate) fn emit_block(
     }
 }
 
-fn code_style() -> Style {
-    Style {
-        code: true,
-        ..Style::default()
-    }
-}
-
 fn code_label_style() -> Style {
     Style {
-        code: true,
         bold: true,
-        ..Style::default()
+        ..code_style()
     }
 }
 

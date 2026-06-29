@@ -19,12 +19,7 @@ pub(crate) fn render(
     let mut ops = Vec::new();
     let mut hits = Vec::new();
     let (margin, content_w) = layout(term);
-    let body = TermInfo {
-        cols: (margin + content_w) as u16,
-        rows: term.rows,
-        cell_w_px: term.cell_w_px,
-        cell_h_px: term.cell_h_px,
-    };
+    let body = term.with_cols(margin + content_w);
     ops.push(RenderOp::LineBreak); // top padding
     let mut details_id = 0usize;
     for block in &slide.blocks {

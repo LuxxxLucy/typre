@@ -3,7 +3,7 @@ use std::path::Path;
 use crate::core::ir::{Inline, RenderOp, Style};
 use crate::commands::typst;
 use crate::layout::{natural_ppi, TermInfo};
-use crate::render::paint::{indent_op, Hit, HitAction};
+use crate::render::paint::{code_style, indent_op, Hit, HitAction};
 
 // Lay inline content into a column of `term.cols - hang`, wrapping on spaces.
 // The first line starts at `lead`; wrapped lines align at the hanging indent
@@ -87,17 +87,7 @@ fn inline_tokens(inls: &[Inline], base: Style, term: &TermInfo, deck_dir: &Path)
     for inl in inls {
         match inl {
             Inline::Text(t, s) => push_words(&mut toks, t, merge(base, *s)),
-            Inline::Code(t) => push_words(
-                &mut toks,
-                t,
-                merge(
-                    base,
-                    Style {
-                        code: true,
-                        ..Style::default()
-                    },
-                ),
-            ),
+            Inline::Code(t) => push_words(&mut toks, t, merge(base, code_style())),
             Inline::Link { label, url } => toks.push(Tok::Link {
                 label: label.clone(),
                 url: url.clone(),

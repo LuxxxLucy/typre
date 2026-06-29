@@ -29,11 +29,11 @@ pub(crate) fn render_fragment(
         .to_hex()
         .to_string();
     let cache_dir = deck_dir.join(".typre-cache");
-    fs::create_dir_all(&cache_dir).context("create cache dir")?;
     let png = cache_dir.join(format!("{hash}.png"));
     if png.exists() {
         return Ok(png);
     }
+    fs::create_dir_all(&cache_dir).context("create cache dir")?;
 
     // Inline math is placed one cell tall; pad it vertically by ~8.8% of its height
     // each side so the glyph occupies ~85% of the cell and sits at text line-height.

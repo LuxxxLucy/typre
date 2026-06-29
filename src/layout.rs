@@ -7,6 +7,18 @@ pub struct TermInfo {
     pub cell_h_px: u16,
 }
 
+impl TermInfo {
+    // Same display geometry at a different usable width (the body's right edge).
+    pub(crate) fn with_cols(&self, cols: usize) -> TermInfo {
+        TermInfo {
+            cols: cols as u16,
+            rows: self.rows,
+            cell_w_px: self.cell_w_px,
+            cell_h_px: self.cell_h_px,
+        }
+    }
+}
+
 // Match typst raster resolution to the terminal cell height, so math sits at text
 // line-height and stays crisp on any display (144 ppi at a 16px cell).
 pub(crate) fn natural_ppi(term: &TermInfo) -> u32 {

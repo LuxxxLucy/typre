@@ -84,6 +84,13 @@ pub(crate) fn dim_style() -> Style {
     }
 }
 
+pub(crate) fn code_style() -> Style {
+    Style {
+        code: true,
+        ..Style::default()
+    }
+}
+
 // A horizontal box rule: a left corner, `w` dashes, a right corner.
 pub(crate) fn hrule(left: char, w: usize, right: char) -> String {
     format!("{left}{}{right}", "─".repeat(w))
