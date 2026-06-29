@@ -25,7 +25,7 @@ pub(crate) fn render(slide: &Slide, term: &TermInfo, deck_dir: &Path) -> Vec<Ren
         };
         for line in split_breaks(&uppercase_inlines(inls)) {
             ops.push(RenderOp::Text(format!("{pre}│ "), Style::default()));
-            emit_inlines(&line, heading_style(), term, deck_dir, 0, &mut ops);
+            emit_inlines(&line, heading_style(), term, deck_dir, 0, 0, &mut ops);
             let slack = inner.saturating_sub(disp_width(&line));
             ops.push(RenderOp::Text(format!("{} │", " ".repeat(slack)), Style::default()));
             ops.push(RenderOp::LineBreak);
@@ -42,7 +42,7 @@ pub(crate) fn render(slide: &Slide, term: &TermInfo, deck_dir: &Path) -> Vec<Ren
             continue;
         };
         ops.push(RenderOp::LineBreak); // blank line above each paragraph
-        emit_inlines(inls, dim_style(), term, deck_dir, margin, &mut ops);
+        emit_inlines(inls, dim_style(), term, deck_dir, margin, margin, &mut ops);
         ops.push(RenderOp::LineBreak);
     }
     ops

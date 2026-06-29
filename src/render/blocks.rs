@@ -23,7 +23,7 @@ pub(crate) fn emit_block(
             if *level == 1 {
                 let avail = (term.cols as usize).saturating_sub(indent);
                 let eff = indent + avail.saturating_sub(disp_width(&owned)) / 2;
-                emit_inlines(&owned, heading_style(), term, deck_dir, eff, ops);
+                emit_inlines(&owned, heading_style(), term, deck_dir, eff, eff, ops);
             } else {
                 // accent bar by level: ┃ for section titles, │ for subsections
                 let accent = if *level == 2 {
@@ -38,12 +38,12 @@ pub(crate) fn emit_block(
                     hinls.push(Inline::Text(accent.to_string(), heading_style()));
                 }
                 hinls.extend(owned);
-                emit_inlines(&hinls, heading_style(), term, deck_dir, indent, ops);
+                emit_inlines(&hinls, heading_style(), term, deck_dir, indent, indent, ops);
             }
             ops.push(RenderOp::LineBreak);
         }
         Block::Paragraph(inls) => {
-            emit_inlines(inls, Style::default(), term, deck_dir, indent, ops);
+            emit_inlines(inls, Style::default(), term, deck_dir, indent, indent, ops);
             ops.push(RenderOp::LineBreak);
         }
         Block::List { ordered, items } => {
@@ -160,8 +160,8 @@ fn emit_list(
         for (j, b) in item.iter().enumerate() {
             match b {
                 Block::Paragraph(inls) => {
-                    let bi = if j == 0 { 0 } else { cont };
-                    emit_inlines(inls, Style::default(), term, deck_dir, bi, ops);
+                    let lead = if j == 0 { 0 } else { cont };
+                    emit_inlines(inls, Style::default(), term, deck_dir, lead, cont, ops);
                     ops.push(RenderOp::LineBreak);
                 }
                 Block::List { ordered: o, items } => {

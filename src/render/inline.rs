@@ -5,25 +5,29 @@ use crate::commands::typst;
 use crate::layout::{natural_ppi, TermInfo};
 use crate::render::paint::{indent_op, Hit, HitAction};
 
-// Lay inline content into a column of `term.cols - indent`, wrapping on spaces.
+// Lay inline content into a column of `term.cols - hang`, wrapping on spaces.
+// The first line starts at `lead`; wrapped lines align at the hanging indent
+// `hang` (for a list item the marker already fills the gap before the first line,
+// so it passes lead 0 and hang past the marker).
 pub(crate) fn emit_inlines(
     inls: &[Inline],
     base: Style,
     term: &TermInfo,
     deck_dir: &Path,
-    indent: usize,
+    lead: usize,
+    hang: usize,
     ops: &mut Vec<RenderOp>,
 ) {
-    let width = (term.cols as usize).saturating_sub(indent).max(1);
+    let width = (term.cols as usize).saturating_sub(hang).max(1);
     let mut col = 0usize;
-    if indent > 0 {
-        ops.push(indent_op(indent));
+    if lead > 0 {
+        ops.push(indent_op(lead));
     }
     for tok in inline_tokens(inls, base, term, deck_dir) {
         if let Tok::Break = tok {
             ops.push(RenderOp::LineBreak);
-            if indent > 0 {
-                ops.push(indent_op(indent));
+            if hang > 0 {
+                ops.push(indent_op(hang));
             }
             col = 0;
             continue;
@@ -31,8 +35,8 @@ pub(crate) fn emit_inlines(
         let w = tok_width(&tok);
         if col + w > width && col > 0 {
             ops.push(RenderOp::LineBreak);
-            if indent > 0 {
-                ops.push(indent_op(indent));
+            if hang > 0 {
+                ops.push(indent_op(hang));
             }
             col = 0;
             if let Tok::Space(_) = tok {
