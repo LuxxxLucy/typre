@@ -2,11 +2,12 @@ use std::path::Path;
 
 use crate::core::ir::{Block, Inline, RenderOp, Slide, Style, TocEntry};
 use crate::layout::{layout, TermInfo};
+use crate::render::blocks::emit_block;
 use crate::render::inline::{disp_width, emit_inlines, link_hits, uppercase_inlines};
 use crate::render::paint::{current_row, dim_style, heading_style, hrule, indent_op, Hit, HitAction};
 
 // Title slide: the heading sits in a bordered box at the normal slide margin and
-// width; paragraphs render below the box as ordinary left-aligned dim text.
+// width; every other block renders below the box like a normal slide body.
 // The opening title slide also lists the deck's sections (slide.toc) as jump links.
 pub(crate) fn render(
     slide: &Slide,
@@ -42,12 +43,18 @@ pub(crate) fn render(
     ));
     ops.push(RenderOp::LineBreak);
 
+    let body = TermInfo {
+        cols: (margin + content_w) as u16,
+        rows: term.rows,
+        cell_w_px: term.cell_w_px,
+        cell_h_px: term.cell_h_px,
+    };
     for block in &slide.blocks {
-        let Block::Paragraph(inls) = block else {
+        if matches!(block, Block::Heading(_, _)) {
             continue;
-        };
-        ops.push(RenderOp::LineBreak); // blank line above each paragraph
-        emit_inlines(inls, dim_style(), term, deck_dir, margin, margin, &mut ops);
+        }
+        ops.push(RenderOp::LineBreak); // blank line above each block
+        emit_block(block, &body, deck_dir, margin, &mut ops);
         ops.push(RenderOp::LineBreak);
     }
 
