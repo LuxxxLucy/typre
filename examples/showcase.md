@@ -6,28 +6,13 @@ author: luxxxlucy
 # typre
 
 A Rust terminal slideshow.
-Mainly Markdown syntax, but provide extra command interfaces.
+Mainly Markdown syntax, but provide extra ◊ command interfaces.
 
 ## Features
 
-Markdown plus extras, at a glance: **bold**, _italic_, `inline code`, and inline math like ◊typst{e^(i pi) + 1 = 0} at text height.
+**bold**, _italic_, and inline math ◊typst{e^(pi) + 1}
 
-```rust
-fn main() {
-    println!("hello from typre");
-}
-```
-
-◊details[A collapsible details block]{
-Click the summary to expand it.
-A second line of detail.
-}
-
-## Text, lists, code
-
-**bold**, _italic_, `inline code`.
-
-A clickable hyperlink (underlined, OSC 8; click to open): [owickstrom.github.io/the-monospace-web](https://owickstrom.github.io/the-monospace-web/)
+A clickable hyperlink (click to open): [owickstrom.github.io/the-monospace-web](https://owickstrom.github.io/the-monospace-web/)
 
 - Banana
 - Paper boat
@@ -47,7 +32,12 @@ fn main() {
 
 ---
 
-Text sits below a double horizontal rule.
+above is a double horizontal rule.
+
+◊details[A collapsible details block]{
+Click the summary to expand it.
+A second line of detail.
+}
 
 ## Typst math
 
