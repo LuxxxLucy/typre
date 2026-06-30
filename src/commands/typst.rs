@@ -15,8 +15,36 @@ pub(crate) fn parse(after: &str) -> Option<(Frag, usize)> {
     Some((Frag::Inline { src: body, width: Width::Natural }, used))
 }
 
-// Bump when the typst wrapper changes, so stale cached PNGs are not reused.
-const STYLE_VERSION: u32 = 3;
+// Hash the local files a fragment imports, recursing through .typ imports.
+fn imported_files_digest(src: &str, deck_dir: &Path) -> String {
+    let mut hasher = blake3::Hasher::new();
+    let mut seen = std::collections::BTreeSet::new();
+    collect_refs(src, deck_dir, &mut seen, &mut hasher);
+    hasher.finalize().to_hex().to_string()
+}
+
+fn collect_refs(
+    src: &str,
+    base: &Path,
+    seen: &mut std::collections::BTreeSet<PathBuf>,
+    hasher: &mut blake3::Hasher,
+) {
+    for quoted in src.split('"').skip(1).step_by(2) {
+        let path = base.join(quoted);
+        if !path.is_file() || !seen.insert(path.clone()) {
+            continue;
+        }
+        let Ok(bytes) = fs::read(&path) else { continue };
+        hasher.update(quoted.as_bytes());
+        hasher.update(&bytes);
+        if path.extension().is_some_and(|e| e == "typ") {
+            if let Ok(text) = std::str::from_utf8(&bytes) {
+                let parent = path.parent().unwrap_or(base).to_path_buf();
+                collect_refs(text, &parent, seen, hasher);
+            }
+        }
+    }
+}
 
 pub(crate) fn render_fragment(
     src: &str,
@@ -25,7 +53,8 @@ pub(crate) fn render_fragment(
     display: bool,
 ) -> Result<PathBuf> {
     let mode = if display { 'b' } else { 'i' };
-    let hash = blake3::hash(format!("{mode}{ppi}v{STYLE_VERSION}{src}").as_bytes())
+    let deps = imported_files_digest(src, deck_dir);
+    let hash = blake3::hash(format!("{mode}{ppi}{src}{deps}").as_bytes())
         .to_hex()
         .to_string();
     let cache_dir = deck_dir.join(".typre-cache");
@@ -35,8 +64,7 @@ pub(crate) fn render_fragment(
     }
     fs::create_dir_all(&cache_dir).context("create cache dir")?;
 
-    // Inline math is placed one cell tall; pad it vertically by ~8.8% of its height
-    // each side so the glyph occupies ~85% of the cell and sits at text line-height.
+    // Pad inline math vertically so the glyph fills ~85% of the one-cell line height.
     let body = if display {
         format!("$ {src} $")
     } else {
