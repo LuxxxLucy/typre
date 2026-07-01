@@ -29,7 +29,7 @@ use crate::core::ir::{Align, Block, Deck, Meta, RenderOp, Style, TocEntry};
 use crate::core::{ir, parse};
 use crate::layout::{layout, viewport, TermInfo};
 use crate::precompile::typst_precompile_errors;
-use crate::render::paint::{dim_style, heading_style, hrule, pad, Hit, HitAction};
+use crate::render::paint::{cell_width, char_cells, dim_style, heading_style, hrule, pad, Hit, HitAction};
 use crate::term::emit;
 
 #[derive(Parser)]
@@ -215,10 +215,10 @@ fn status_bar(term: &TermInfo, idx: usize, total: usize, meta: &Meta) -> (Vec<Re
     };
     let hint = "? help";
     let right = format!("{} / {}", idx + 1, total);
-    let used = button.chars().count()
-        + meta_text.chars().count()
-        + hint.chars().count()
-        + right.chars().count()
+    let used = cell_width(button)
+        + cell_width(&meta_text)
+        + cell_width(hint)
+        + cell_width(&right)
         + 4;
     let gap = content_w.saturating_sub(used).max(1);
     ops.push(RenderOp::Text(button.to_string(), bold));
@@ -228,7 +228,7 @@ fn status_bar(term: &TermInfo, idx: usize, total: usize, meta: &Meta) -> (Vec<Re
     ops.push(RenderOp::Text(right, bold));
     let hit = Hit {
         row,
-        cols: mx..mx + button.chars().count() as u16,
+        cols: mx..mx + cell_width(button) as u16,
         action: HitAction::Goto(0),
     };
     (ops, hit)
@@ -236,7 +236,7 @@ fn status_bar(term: &TermInfo, idx: usize, total: usize, meta: &Meta) -> (Vec<Re
 
 // A centered, bordered box; each line carries its own style.
 fn centered_box(term: &TermInfo, lines: &[(String, Style)]) -> Vec<RenderOp> {
-    let w = lines.iter().map(|(l, _)| l.chars().count()).max().unwrap_or(0);
+    let w = lines.iter().map(|(l, _)| cell_width(l)).max().unwrap_or(0);
     let cols = term.cols as usize;
     let rows = term.rows as usize;
     let x = (cols.saturating_sub(w + 4) / 2) as u16;
@@ -319,10 +319,19 @@ fn error_gate(term: &TermInfo, errors: &[(usize, String)]) -> Vec<RenderOp> {
 }
 
 fn truncate(s: &str, max: usize) -> String {
-    if s.chars().count() <= max {
+    if cell_width(s) <= max {
         return s.to_string();
     }
-    let mut out: String = s.chars().take(max.saturating_sub(1)).collect();
+    let mut out = String::new();
+    let mut w = 0;
+    for c in s.chars() {
+        let cw = char_cells(c);
+        if w + cw > max.saturating_sub(1) {
+            break;
+        }
+        out.push(c);
+        w += cw;
+    }
     out.push('…');
     out
 }

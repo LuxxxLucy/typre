@@ -3,8 +3,19 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
+
 use crate::core::ir::{Align, RenderOp, Style, Width};
 use crate::layout::{viewport, TermInfo};
+
+// Terminal cell width: CJK and other wide glyphs occupy two columns.
+pub(crate) fn cell_width(s: &str) -> usize {
+    UnicodeWidthStr::width(s)
+}
+
+pub(crate) fn char_cells(c: char) -> usize {
+    UnicodeWidthChar::width(c).unwrap_or(0)
+}
 
 #[derive(Debug)]
 pub struct Hit {
@@ -126,7 +137,7 @@ pub(crate) fn hrule(left: char, w: usize, right: char) -> String {
 }
 
 pub(crate) fn pad(s: &str, w: usize, align: Align) -> String {
-    let len = s.chars().count();
+    let len = cell_width(s);
     if len >= w {
         return s.to_string();
     }

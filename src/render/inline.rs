@@ -3,7 +3,7 @@ use std::path::Path;
 use crate::core::ir::{Inline, RenderOp, Style};
 use crate::commands::typst;
 use crate::layout::{natural_ppi, TermInfo};
-use crate::render::paint::{code_style, image_dims, indent_op, Hit, HitAction};
+use crate::render::paint::{cell_width, char_cells, code_style, image_dims, indent_op, Hit, HitAction};
 
 // Lay inline content into a column of `term.cols - hang`, wrapping on spaces.
 // The first line starts at `lead`; wrapped lines align at the hanging indent
@@ -74,10 +74,10 @@ enum Tok {
 
 fn tok_width(t: &Tok) -> usize {
     match t {
-        Tok::Text(s, _) => s.chars().count(),
+        Tok::Text(s, _) => cell_width(s),
         Tok::Space(_) => 1,
         Tok::Img { cols, .. } => *cols as usize,
-        Tok::Link { label, .. } => label.chars().count(),
+        Tok::Link { label, .. } => cell_width(label),
         Tok::Break => 0,
     }
 }
@@ -121,13 +121,25 @@ fn inline_tokens(inls: &[Inline], base: Style, term: &TermInfo, deck_dir: &Path)
     toks
 }
 
+// Split on spaces; each wide (CJK) char is its own token so runs break between characters.
 fn push_words(toks: &mut Vec<Tok>, text: &str, style: Style) {
-    for w in split_keep_spaces(text) {
-        if w == " " {
-            toks.push(Tok::Space(style));
+    let mut word = String::new();
+    for c in text.chars() {
+        if c == ' ' || char_cells(c) >= 2 {
+            if !word.is_empty() {
+                toks.push(Tok::Text(std::mem::take(&mut word), style));
+            }
+            if c == ' ' {
+                toks.push(Tok::Space(style));
+            } else {
+                toks.push(Tok::Text(c.to_string(), style));
+            }
         } else {
-            toks.push(Tok::Text(w, style));
+            word.push(c);
         }
+    }
+    if !word.is_empty() {
+        toks.push(Tok::Text(word, style));
     }
 }
 
@@ -141,25 +153,6 @@ fn merge(a: Style, b: Style) -> Style {
     }
 }
 
-fn split_keep_spaces(s: &str) -> Vec<String> {
-    let mut out = Vec::new();
-    let mut cur = String::new();
-    for c in s.chars() {
-        if c == ' ' {
-            if !cur.is_empty() {
-                out.push(std::mem::take(&mut cur));
-            }
-            out.push(" ".to_string());
-        } else {
-            cur.push(c);
-        }
-    }
-    if !cur.is_empty() {
-        out.push(cur);
-    }
-    out
-}
-
 // Click targets for hyperlinks, found by replaying the body's cursor motion so
 // each link's row and column span are known without threading state through emit.
 pub(crate) fn link_hits(ops: &[RenderOp]) -> Vec<Hit> {
@@ -171,10 +164,10 @@ pub(crate) fn link_hits(ops: &[RenderOp]) -> Vec<Hit> {
                 row += 1;
                 col = 0;
             }
-            RenderOp::Text(t, _) => col += t.chars().count() as u16,
+            RenderOp::Text(t, _) => col += cell_width(t) as u16,
             RenderOp::InlineImage { cols, .. } => col += cols,
             RenderOp::Link { label, url, .. } => {
-                let w = label.chars().count() as u16;
+                let w = cell_width(label) as u16;
                 hits.push(Hit {
                     row,
                     cols: col..col + w,
@@ -201,9 +194,9 @@ pub(crate) fn uppercase_inlines(inls: &[Inline]) -> Vec<Inline> {
 pub(crate) fn disp_width(inls: &[Inline]) -> usize {
     inls.iter()
         .map(|inl| match inl {
-            Inline::Text(t, _) => t.chars().count(),
-            Inline::Code(t) => t.chars().count(),
-            Inline::Link { label, .. } => label.chars().count(),
+            Inline::Text(t, _) => cell_width(t),
+            Inline::Code(t) => cell_width(t),
+            Inline::Link { label, .. } => cell_width(label),
             _ => 0,
         })
         .sum()

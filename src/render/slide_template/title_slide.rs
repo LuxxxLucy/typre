@@ -4,7 +4,7 @@ use crate::core::ir::{Block, Inline, RenderOp, Slide, Style, TocEntry};
 use crate::layout::{layout, TermInfo};
 use crate::render::blocks::emit_block;
 use crate::render::inline::{disp_width, emit_inlines, link_hits, uppercase_inlines};
-use crate::render::paint::{current_row, dim_style, heading_style, hrule, indent_op, Hit, HitAction};
+use crate::render::paint::{cell_width, current_row, dim_style, heading_style, hrule, indent_op, Hit, HitAction};
 
 // Title slide: the heading sits in a bordered box at the normal slide margin and
 // width. The opening title slide lists the deck's sections (slide.toc) as jump
@@ -89,7 +89,7 @@ fn emit_toc(toc: &[TocEntry], content_w: usize, margin: usize, ops: &mut Vec<Ren
             .collect();
         let row = current_row(ops) as u16;
         let start = margin as u16;
-        let end = start + label.chars().count() as u16;
+        let end = start + cell_width(&label) as u16;
         ops.push(indent_op(margin));
         ops.push(RenderOp::Text(label, dim_style()));
         ops.push(RenderOp::LineBreak);

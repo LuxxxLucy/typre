@@ -1,6 +1,6 @@
 use crate::core::ir::{Align, Block, RenderOp, Style};
 use crate::layout::TermInfo;
-use crate::render::paint::{current_row, heading_style, hrule, pad, Hit, HitAction};
+use crate::render::paint::{cell_width, current_row, heading_style, hrule, pad, Hit, HitAction};
 
 use super::{bracket_cmd, Frag};
 
@@ -34,11 +34,11 @@ pub(crate) fn render(
     let summary_line = format!("{marker} {summary}");
     // body lines align under the summary text, past the marker and its space
     let body_indent = 2;
-    let mut widest = summary_line.chars().count();
+    let mut widest = cell_width(&summary_line);
     if open {
         widest = widest.max(
             body.iter()
-                .map(|l| l.chars().count() + body_indent)
+                .map(|l| cell_width(l) + body_indent)
                 .max()
                 .unwrap_or(0),
         );

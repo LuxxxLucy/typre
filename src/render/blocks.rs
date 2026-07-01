@@ -4,7 +4,7 @@ use crate::core::ir::{Align, Block, Inline, RenderOp, Style, Width};
 use crate::layout::TermInfo;
 use crate::commands;
 use crate::render::inline::{disp_width, emit_inlines, flat_text, uppercase_inlines};
-use crate::render::paint::{code_style, heading_style, indent_op, pad, place_image};
+use crate::render::paint::{cell_width, code_style, heading_style, indent_op, pad, place_image};
 
 pub(crate) fn emit_block(
     block: &Block,
@@ -163,7 +163,7 @@ fn emit_list(
             format!("{}{marker}", " ".repeat(indent)),
             Style::default(),
         ));
-        let cont = indent + marker.chars().count();
+        let cont = indent + cell_width(&marker);
         for (j, b) in item.iter().enumerate() {
             match b {
                 Block::Paragraph(inls) => {
