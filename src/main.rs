@@ -416,14 +416,14 @@ fn frame(
     Frame { ops, hits, height }
 }
 
-// A vertical scrollbar on the right column: a track with a thumb sized to the
-// visible fraction and positioned by the scroll offset. Empty when all fits.
+// A vertical scrollbar at the far-right terminal column: a track with a thumb
+// sized to the visible fraction and positioned by the scroll offset. Empty when
+// all fits.
 fn scrollbar(term: &TermInfo, scroll: usize, vp: usize, height: usize) -> Vec<RenderOp> {
     if height <= vp || vp == 0 {
         return Vec::new();
     }
-    let (margin, content_w) = layout(term);
-    let col = (margin + content_w).min(term.cols.saturating_sub(1) as usize) as u16;
+    let col = term.cols.saturating_sub(1);
     let thumb = (vp * vp / height).clamp(1, vp);
     let pos = scroll * (vp - thumb) / (height - vp);
     let mut ops = Vec::new();
