@@ -1,14 +1,15 @@
 use pulldown_cmark::{Alignment, CodeBlockKind, Event, HeadingLevel, Options, Parser, Tag, TagEnd};
 
 use crate::commands::{parse_command, Frag};
-use crate::core::ir::{Align, Block, Deck, Inline, Meta, Slide, Style};
+use crate::core::ir::{Align, Block, Deck, Inline, Meta, Slide, Style, Width};
 
 pub fn parse(md: &str) -> Deck {
     let (md, frags) = extract_typst(md);
     let md = md.as_str();
     let opts = Options::ENABLE_TABLES
         | Options::ENABLE_STRIKETHROUGH
-        | Options::ENABLE_YAML_STYLE_METADATA_BLOCKS;
+        | Options::ENABLE_YAML_STYLE_METADATA_BLOCKS
+        | Options::ENABLE_MATH;
 
     let mut meta = Meta::default();
     let mut slides: Vec<Slide> = vec![Slide::default()];
@@ -65,7 +66,7 @@ pub fn parse(md: &str) -> Deck {
                 // turns into block math, a structured command into its own block.
                 if inl.len() == 1 {
                     match inl.pop().unwrap() {
-                        Inline::InlineTypst { src, width } => {
+                        Inline::InlineTypst { src, width, display: true } => {
                             push_block(&mut block_stack, Block::BlockTypst { src, width })
                         }
                         Inline::BlockFragment(b) => push_block(&mut block_stack, *b),
@@ -200,6 +201,8 @@ pub fn parse(md: &str) -> Deck {
                 }
             }
             Event::Code(t) => inlines.push(Inline::Code(t.to_string())),
+            Event::InlineMath(t) => inlines.push(math_inline(&t, false, style)),
+            Event::DisplayMath(t) => inlines.push(math_inline(&t, true, style)),
             Event::SoftBreak => inlines.push(Inline::SoftBreak),
             Event::HardBreak => inlines.push(Inline::HardBreak),
 
@@ -399,6 +402,7 @@ fn push_text(inlines: &mut Vec<Inline>, t: &str, style: Style, frags: &[Frag]) {
                     Frag::Inline { src, width } => Inline::InlineTypst {
                         src: src.clone(),
                         width: *width,
+                        display: true,
                     },
                     Frag::Block(b) => Inline::BlockFragment(Box::new(b.clone())),
                 });
@@ -411,6 +415,13 @@ fn push_text(inlines: &mut Vec<Inline>, t: &str, style: Style, frags: &[Frag]) {
     }
     if !buf.is_empty() {
         inlines.push(Inline::Text(buf, style));
+    }
+}
+
+fn math_inline(latex: &str, display: bool, style: Style) -> Inline {
+    match mitex::convert_math(latex, None) {
+        Ok(src) => Inline::InlineTypst { src, width: Width::Natural, display },
+        Err(e) => Inline::Text(format!("[math error: {e}]"), style),
     }
 }
 

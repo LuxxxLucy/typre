@@ -10,6 +10,17 @@ use crate::render::paint::place_image;
 
 use super::{brace_cmd, Frag};
 
+// Native-typst aliases for the helper names mitex emits.
+const MATH_SHIM: &str = r#"#let mitexsqrt(..a) = { let p = a.pos(); if p.len() == 1 { math.sqrt(p.at(0)) } else { math.root(p.at(1), p.at(0)) } }
+#let zws = math.zws
+#let aligned(..a) = a.pos().join()
+#let matrix(..a) = math.mat(delim: none, ..a)
+#let pmatrix(..a) = math.mat(delim: "(", ..a)
+#let bmatrix(..a) = math.mat(delim: "[", ..a)
+#let vmatrix(..a) = math.mat(delim: "|", ..a)
+#let Vmatrix(..a) = math.mat(delim: "‖", ..a)
+"#;
+
 pub(crate) fn parse(after: &str) -> Option<(Frag, usize)> {
     let (body, used) = brace_cmd(after, "typst")?;
     Some((Frag::Inline { src: body, width: Width::Natural }, used))
@@ -71,7 +82,7 @@ pub(crate) fn render_fragment(
         format!("#context {{ let e = [${src}$]; box(inset: (y: measure(e).height * 0.088), e) }}")
     };
     let wrapped = format!(
-        "#set page(width: auto, height: auto, margin: 0pt, fill: none)\n#set text(fill: white)\n{body}"
+        "#set page(width: auto, height: auto, margin: 0pt, fill: none)\n#set text(fill: white)\n{MATH_SHIM}{body}"
     );
     let tmp = deck_dir.join(format!(".typre-frag-{hash}.typ"));
     fs::write(&tmp, wrapped).context("write temp typst")?;

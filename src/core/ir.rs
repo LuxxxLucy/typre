@@ -100,7 +100,9 @@ pub enum Inline {
     Text(String, Style),
     Code(String),
     Link { label: String, url: String },
-    InlineTypst { src: String, width: Width },
+    // `display` lifts a lone fragment to its own block: set for `◊typst{}` and
+    // `$$…$$`, cleared for inline `$…$`.
+    InlineTypst { src: String, width: Width, display: bool },
     // A structured ◊ command (tree/grid/figure/details) restored mid-stream; the
     // paragraph fold lifts a lone one to its block. Never reaches inline rendering.
     BlockFragment(Box<Block>),
