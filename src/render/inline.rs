@@ -106,9 +106,10 @@ fn inline_tokens(inls: &[Inline], base: Style, term: &TermInfo, deck_dir: &Path)
                     let cw = term.cell_w_px.max(1) as f32;
                     let ch = term.cell_h_px.max(1) as f32;
                     let (w, h) = image_dims(&png).unwrap_or((cw as u32, ch as u32));
-                    // Displayed one cell tall (r=1); width preserves aspect, so it is
-                    // independent of the raster resolution.
-                    let cols = ((w as f32 / h as f32) * ch / cw).round().max(1.0) as u16;
+                    // One cell tall (r=1); the placeholder fit preserves aspect, so round
+                    // the width up. A box narrower than the fragment's aspect shrinks it
+                    // below one cell, leaving fragments at inconsistent heights.
+                    let cols = ((w as f32 / h as f32) * ch / cw).ceil().max(1.0) as u16;
                     toks.push(Tok::Img { png, cols });
                 }
                 Err(e) => push_words(&mut toks, &format!("[typst error: {e}]"), base),
