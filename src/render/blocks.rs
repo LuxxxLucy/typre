@@ -4,7 +4,7 @@ use crate::core::ir::{Align, Block, Inline, RenderOp, Style, Width};
 use crate::layout::TermInfo;
 use crate::commands;
 use crate::render::inline::{disp_width, emit_inlines, flat_text, uppercase_inlines};
-use crate::render::paint::{cell_width, code_style, heading_style, indent_op, pad, place_image};
+use crate::render::paint::{cell_width, code_style, heading_style, indent_op, pad, place_image, quote_style};
 
 pub(crate) fn emit_block(
     block: &Block,
@@ -118,27 +118,74 @@ fn code_label_style() -> Style {
     }
 }
 
-// A blockquote: render the inner blocks, then prefix every line with a `│ ` bar.
+// A blockquote: a grey background box spanning the content width, one space of
+// inset each side, with a blank row above and below.
 fn emit_quote(inner: &[Block], term: &TermInfo, deck_dir: &Path, indent: usize, ops: &mut Vec<RenderOp>) {
-    // The `│ ` bar plus the outer indent prefixes every line, so shrink the width
-    // the inner blocks wrap to by that much or their text overruns the right edge.
-    let inner_term = term.with_cols((term.cols as usize).saturating_sub(indent + 2));
+    let box_w = (term.cols as usize).saturating_sub(indent).max(1);
+    let text_w = box_w.saturating_sub(2).max(1);
+    let inner_term = term.with_cols(text_w);
     let mut sub = Vec::new();
     for b in inner {
         emit_block(b, &inner_term, deck_dir, 0, &mut sub);
     }
-    let bar = || RenderOp::Text(format!("{}│ ", " ".repeat(indent)), Style::default());
-    let n = sub.len();
-    ops.push(bar());
-    for (k, op) in sub.into_iter().enumerate() {
-        if let RenderOp::LineBreak = op {
-            ops.push(RenderOp::LineBreak);
-            if k + 1 != n {
-                ops.push(bar());
-            }
-        } else {
-            ops.push(op);
+    let q = quote_style();
+    let blank_row = |ops: &mut Vec<RenderOp>| {
+        ops.push(indent_op(indent));
+        ops.push(RenderOp::Text(" ".repeat(box_w), q));
+        ops.push(RenderOp::LineBreak);
+    };
+    blank_row(ops);
+    for line in split_lines(sub) {
+        let w = line_width(&line);
+        ops.push(indent_op(indent));
+        ops.push(RenderOp::Text(" ".to_string(), q));
+        for op in line {
+            ops.push(shade(op, q));
         }
+        ops.push(RenderOp::Text(" ".repeat(box_w.saturating_sub(1 + w)), q));
+        ops.push(RenderOp::LineBreak);
+    }
+    blank_row(ops);
+}
+
+// Split an op stream into visual lines at LineBreaks, dropping the trailing empty
+// line every block leaves behind.
+fn split_lines(ops: Vec<RenderOp>) -> Vec<Vec<RenderOp>> {
+    let mut lines = vec![Vec::new()];
+    for op in ops {
+        if let RenderOp::LineBreak = op {
+            lines.push(Vec::new());
+        } else {
+            lines.last_mut().unwrap().push(op);
+        }
+    }
+    if lines.last().is_some_and(|l| l.is_empty()) {
+        lines.pop();
+    }
+    lines
+}
+
+fn line_width(line: &[RenderOp]) -> usize {
+    line.iter()
+        .map(|op| match op {
+            RenderOp::Text(t, _) => cell_width(t),
+            RenderOp::InlineImage { cols, .. } => *cols as usize,
+            RenderOp::Link { label, .. } => cell_width(label),
+            _ => 0,
+        })
+        .sum()
+}
+
+// Add the box background to a text or link op; other ops pass through unstyled.
+fn shade(op: RenderOp, bg: Style) -> RenderOp {
+    match op {
+        RenderOp::Text(t, s) => RenderOp::Text(t, Style { quote: bg.quote, ..s }),
+        RenderOp::Link { label, url, style } => RenderOp::Link {
+            label,
+            url,
+            style: Style { quote: bg.quote, ..style },
+        },
+        other => other,
     }
 }
 

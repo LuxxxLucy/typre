@@ -131,6 +131,13 @@ pub(crate) fn code_style() -> Style {
     }
 }
 
+pub(crate) fn quote_style() -> Style {
+    Style {
+        quote: true,
+        ..Style::default()
+    }
+}
+
 // A horizontal box rule: a left corner, `w` dashes, a right corner.
 pub(crate) fn hrule(left: char, w: usize, right: char) -> String {
     format!("{left}{}{right}", "─".repeat(w))

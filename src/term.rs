@@ -104,11 +104,14 @@ fn emit_text(out: &mut impl Write, text: &str, style: Style) -> Result<()> {
     if style.dim {
         queue!(out, SetAttribute(Attribute::Dim))?;
     }
+    if style.quote {
+        queue!(out, SetBackgroundColor(Color::AnsiValue(237)))?;
+    }
     if style.code {
         queue!(out, SetBackgroundColor(Color::AnsiValue(236)))?;
     }
     queue!(out, Print(text))?;
-    if style.bold || style.italic || style.underline || style.dim || style.code {
+    if style.bold || style.italic || style.underline || style.dim || style.code || style.quote {
         queue!(out, SetAttribute(Attribute::Reset))?;
     }
     Ok(())

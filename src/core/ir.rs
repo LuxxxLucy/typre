@@ -117,6 +117,7 @@ pub struct Style {
     pub underline: bool,
     pub dim: bool,
     pub code: bool,
+    pub quote: bool,
 }
 
 #[derive(Debug)]

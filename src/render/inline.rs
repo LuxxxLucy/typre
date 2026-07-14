@@ -151,6 +151,7 @@ fn merge(a: Style, b: Style) -> Style {
         underline: a.underline || b.underline,
         dim: a.dim || b.dim,
         code: a.code || b.code,
+        quote: a.quote || b.quote,
     }
 }
 
