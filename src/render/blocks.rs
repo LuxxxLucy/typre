@@ -120,9 +120,12 @@ fn code_label_style() -> Style {
 
 // A blockquote: render the inner blocks, then prefix every line with a `│ ` bar.
 fn emit_quote(inner: &[Block], term: &TermInfo, deck_dir: &Path, indent: usize, ops: &mut Vec<RenderOp>) {
+    // The `│ ` bar plus the outer indent prefixes every line, so shrink the width
+    // the inner blocks wrap to by that much or their text overruns the right edge.
+    let inner_term = term.with_cols((term.cols as usize).saturating_sub(indent + 2));
     let mut sub = Vec::new();
     for b in inner {
-        emit_block(b, term, deck_dir, 0, &mut sub);
+        emit_block(b, &inner_term, deck_dir, 0, &mut sub);
     }
     let bar = || RenderOp::Text(format!("{}│ ", " ".repeat(indent)), Style::default());
     let n = sub.len();
