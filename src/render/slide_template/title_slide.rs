@@ -82,8 +82,9 @@ fn emit_toc(toc: &[TocEntry], content_w: usize, margin: usize, ops: &mut Vec<Ren
     ops.push(indent_op(margin));
     ops.push(RenderOp::Text("CONTENTS".to_string(), heading_style()));
     ops.push(RenderOp::LineBreak);
+    let num_w = toc.len().to_string().len();
     for (n, entry) in toc.iter().enumerate() {
-        let label: String = format!("{}.  {}", n + 1, entry.title)
+        let label: String = format!("{:>num_w$}.  {}", n + 1, entry.title)
             .chars()
             .take(content_w)
             .collect();
