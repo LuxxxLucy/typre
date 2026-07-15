@@ -98,7 +98,7 @@ pub(crate) fn emit_block(
             ops.push(RenderOp::LineBreak);
         }
         Block::Table { aligns, head, rows } => {
-            emit_table(aligns, head, rows, indent, ops);
+            emit_table(aligns, head, rows, term, indent, ops);
         }
         Block::Quote(inner) => emit_quote(inner, term, deck_dir, indent, ops),
         Block::Tree(nodes) => commands::tree::render(nodes, indent, ops),
@@ -234,6 +234,7 @@ fn emit_table(
     aligns: &[Align],
     head: &[Vec<Inline>],
     rows: &[Vec<Vec<Inline>>],
+    term: &TermInfo,
     indent: usize,
     ops: &mut Vec<RenderOp>,
 ) {
@@ -253,6 +254,20 @@ fn emit_table(
         widths[c] = w;
     }
 
+    // Fit within the terminal: each column costs its width plus a ` … │` of 3, and
+    // the table opens with one `│`. Shave the widest column until the row fits, then
+    // cells wrap into their capped width instead of overrunning the right edge.
+    let budget = (term.cols as usize)
+        .saturating_sub(indent + 1 + 3 * ncol)
+        .max(ncol);
+    while widths.iter().sum::<usize>() > budget {
+        let widest = (0..ncol).max_by_key(|&c| widths[c]).unwrap();
+        if widths[widest] <= 1 {
+            break;
+        }
+        widths[widest] -= 1;
+    }
+
     let pre = " ".repeat(indent);
     let border = |l: char, m: char, r: char| {
         let mut s = String::new();
@@ -267,24 +282,82 @@ fn emit_table(
         ops.push(RenderOp::Text(format!("{pre}{s}"), Style::default()));
         ops.push(RenderOp::LineBreak);
     };
+    let emit_row = |cells: &[String], style: Style, ops: &mut Vec<RenderOp>| {
+        let wrapped: Vec<Vec<String>> = (0..ncol)
+            .map(|c| wrap_cell(cells.get(c).map(String::as_str).unwrap_or(""), widths[c]))
+            .collect();
+        let height = wrapped.iter().map(Vec::len).max().unwrap_or(1);
+        for r in 0..height {
+            ops.push(RenderOp::Text(pre.clone(), Style::default()));
+            for c in 0..ncol {
+                ops.push(RenderOp::Text("│ ".to_string(), Style::default()));
+                let seg = wrapped[c].get(r).map(String::as_str).unwrap_or("");
+                ops.push(RenderOp::Text(format!("{} ", pad(seg, widths[c], align_of(c))), style));
+            }
+            ops.push(RenderOp::Text("│".to_string(), Style::default()));
+            ops.push(RenderOp::LineBreak);
+        }
+    };
 
     push_line(border('┌', '┬', '┐'), ops);
-    ops.push(RenderOp::Text(pre.clone(), Style::default()));
-    for c in 0..ncol {
-        ops.push(RenderOp::Text("│ ".to_string(), Style::default()));
-        let txt = pad(&cell_text(head.get(c)), widths[c], align_of(c));
-        ops.push(RenderOp::Text(format!("{txt} "), heading_style()));
-    }
-    ops.push(RenderOp::Text("│".to_string(), Style::default()));
-    ops.push(RenderOp::LineBreak);
+    let head_cells: Vec<String> = (0..ncol).map(|c| cell_text(head.get(c))).collect();
+    emit_row(&head_cells, heading_style(), ops);
     push_line(border('├', '┼', '┤'), ops);
     for row in rows {
-        let mut line = String::from("│");
-        for c in 0..ncol {
-            let txt = pad(&cell_text(row.get(c)), widths[c], align_of(c));
-            line.push_str(&format!(" {txt} │"));
-        }
-        push_line(line, ops);
+        let cells: Vec<String> = (0..ncol).map(|c| cell_text(row.get(c))).collect();
+        emit_row(&cells, Style::default(), ops);
     }
     push_line(border('└', '┴', '┘'), ops);
+}
+
+// Greedy word wrap to `w` display columns, hard-splitting any single word too wide.
+fn wrap_cell(s: &str, w: usize) -> Vec<String> {
+    let w = w.max(1);
+    let mut pieces: Vec<String> = Vec::new();
+    for word in s.split_whitespace() {
+        if cell_width(word) <= w {
+            pieces.push(word.to_string());
+        } else {
+            pieces.extend(hard_split(word, w));
+        }
+    }
+    let mut lines: Vec<String> = Vec::new();
+    let mut cur = String::new();
+    for p in pieces {
+        if cur.is_empty() {
+            cur = p;
+        } else if cell_width(&cur) + 1 + cell_width(&p) <= w {
+            cur.push(' ');
+            cur.push_str(&p);
+        } else {
+            lines.push(std::mem::take(&mut cur));
+            cur = p;
+        }
+    }
+    if !cur.is_empty() {
+        lines.push(cur);
+    }
+    if lines.is_empty() {
+        lines.push(String::new());
+    }
+    lines
+}
+
+fn hard_split(word: &str, w: usize) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut cur = String::new();
+    let mut cw = 0;
+    for ch in word.chars() {
+        let cc = cell_width(&ch.to_string());
+        if cw + cc > w && !cur.is_empty() {
+            out.push(std::mem::take(&mut cur));
+            cw = 0;
+        }
+        cur.push(ch);
+        cw += cc;
+    }
+    if !cur.is_empty() {
+        out.push(cur);
+    }
+    out
 }
