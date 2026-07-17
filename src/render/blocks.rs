@@ -118,34 +118,66 @@ fn code_label_style() -> Style {
     }
 }
 
+// A single-column box: content wrapped into `vlines` framed at width `inner`, with
+// a top and bottom row. `deco` decides the framing (border vs background fill); the
+// left margin `indent` stays default-styled outside the box.
+pub(crate) struct BoxDeco {
+    pub top: String,
+    pub bottom: String,
+    pub left: String,
+    pub right: String,
+    pub frame: Style,
+    pub content_bg: Style,
+}
+
+pub(crate) fn emit_box(
+    vlines: Vec<Vec<RenderOp>>,
+    inner: usize,
+    indent: usize,
+    deco: &BoxDeco,
+    ops: &mut Vec<RenderOp>,
+) {
+    let row = |body: &str, ops: &mut Vec<RenderOp>| {
+        ops.push(indent_op(indent));
+        ops.push(RenderOp::Text(body.to_string(), deco.frame));
+        ops.push(RenderOp::LineBreak);
+    };
+    row(&deco.top, ops);
+    for line in vlines {
+        let w = line_width(&line);
+        ops.push(indent_op(indent));
+        ops.push(RenderOp::Text(deco.left.clone(), deco.frame));
+        for op in line {
+            ops.push(shade(op, deco.content_bg));
+        }
+        ops.push(RenderOp::Text(
+            format!("{}{}", " ".repeat(inner.saturating_sub(w)), deco.right),
+            deco.frame,
+        ));
+        ops.push(RenderOp::LineBreak);
+    }
+    row(&deco.bottom, ops);
+}
+
 // A blockquote: a grey background box spanning the content width, one space of
 // inset each side, with a blank row above and below.
 fn emit_quote(inner: &[Block], term: &TermInfo, deck_dir: &Path, indent: usize, ops: &mut Vec<RenderOp>) {
-    let box_w = (term.cols as usize).saturating_sub(indent).max(1);
-    let text_w = box_w.saturating_sub(2).max(1);
+    let text_w = (term.cols as usize).saturating_sub(indent + 2).max(1);
     let inner_term = term.with_cols(text_w);
     let mut sub = Vec::new();
     for b in inner {
         emit_block(b, &inner_term, deck_dir, 0, &mut sub);
     }
     let q = quote_style();
-    let blank_row = |ops: &mut Vec<RenderOp>| {
-        ops.push(indent_op(indent));
-        ops.push(RenderOp::Text(" ".repeat(box_w), q));
-        ops.push(RenderOp::LineBreak);
+    let deco = BoxDeco {
+        top: " ".repeat(text_w + 2),
+        bottom: " ".repeat(text_w + 2),
+        left: " ".to_string(),
+        right: " ".to_string(),
+        frame: q,
+        content_bg: q,
     };
-    blank_row(ops);
-    for line in split_lines(sub) {
-        let w = line_width(&line);
-        ops.push(indent_op(indent));
-        ops.push(RenderOp::Text(" ".to_string(), q));
-        for op in line {
-            ops.push(shade(op, q));
-        }
-        ops.push(RenderOp::Text(" ".repeat(box_w.saturating_sub(1 + w)), q));
-        ops.push(RenderOp::LineBreak);
-    }
-    blank_row(ops);
+    emit_box(split_lines(sub), text_w, indent, &deco, ops);
 }
 
 // Split an op stream into visual lines at LineBreaks, dropping the trailing empty

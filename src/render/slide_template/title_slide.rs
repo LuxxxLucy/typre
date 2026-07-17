@@ -2,7 +2,7 @@ use std::path::Path;
 
 use crate::core::ir::{Block, Inline, RenderOp, Slide, Style, TocEntry};
 use crate::layout::{layout, TermInfo};
-use crate::render::blocks::{emit_block, line_width, split_lines};
+use crate::render::blocks::{emit_block, emit_box, line_width, split_lines, BoxDeco};
 use crate::render::inline::{emit_inlines, link_hits, uppercase_inlines};
 use crate::render::paint::{cell_width, current_row, dim_style, heading_style, hrule, indent_op, Hit, HitAction};
 
@@ -15,7 +15,6 @@ pub(crate) fn render(
     deck_dir: &Path,
 ) -> (Vec<RenderOp>, Vec<Hit>) {
     let (margin, content_w) = layout(term);
-    let pre = " ".repeat(margin);
 
     // Wrap the title to the zen column, then size the box to the widest wrapped line.
     let lines: Vec<Vec<Inline>> = slide
@@ -41,23 +40,15 @@ pub(crate) fn render(
 
     let mut ops = Vec::new();
     ops.push(RenderOp::LineBreak); // top padding
-    ops.push(RenderOp::Text(
-        format!("{pre}{}", hrule('┌', inner + 2, '┐')),
-        Style::default(),
-    ));
-    ops.push(RenderOp::LineBreak);
-    for line in vlines {
-        let w = line_width(&line);
-        ops.push(RenderOp::Text(format!("{pre}│ "), Style::default()));
-        ops.extend(line);
-        ops.push(RenderOp::Text(format!("{} │", " ".repeat(inner - w)), Style::default()));
-        ops.push(RenderOp::LineBreak);
-    }
-    ops.push(RenderOp::Text(
-        format!("{pre}{}", hrule('└', inner + 2, '┘')),
-        Style::default(),
-    ));
-    ops.push(RenderOp::LineBreak);
+    let deco = BoxDeco {
+        top: hrule('┌', inner + 2, '┐'),
+        bottom: hrule('└', inner + 2, '┘'),
+        left: "│ ".to_string(),
+        right: " │".to_string(),
+        frame: Style::default(),
+        content_bg: Style::default(),
+    };
+    emit_box(vlines, inner, margin, &deco, &mut ops);
 
     let mut hits = emit_toc(&slide.toc, content_w, margin, &mut ops);
 
