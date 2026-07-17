@@ -150,7 +150,7 @@ fn emit_quote(inner: &[Block], term: &TermInfo, deck_dir: &Path, indent: usize, 
 
 // Split an op stream into visual lines at LineBreaks, dropping the trailing empty
 // line every block leaves behind.
-fn split_lines(ops: Vec<RenderOp>) -> Vec<Vec<RenderOp>> {
+pub(crate) fn split_lines(ops: Vec<RenderOp>) -> Vec<Vec<RenderOp>> {
     let mut lines = vec![Vec::new()];
     for op in ops {
         if let RenderOp::LineBreak = op {
@@ -165,7 +165,7 @@ fn split_lines(ops: Vec<RenderOp>) -> Vec<Vec<RenderOp>> {
     lines
 }
 
-fn line_width(line: &[RenderOp]) -> usize {
+pub(crate) fn line_width(line: &[RenderOp]) -> usize {
     line.iter()
         .map(|op| match op {
             RenderOp::Text(t, _) => cell_width(t),

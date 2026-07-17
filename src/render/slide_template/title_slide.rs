@@ -2,8 +2,8 @@ use std::path::Path;
 
 use crate::core::ir::{Block, Inline, RenderOp, Slide, Style, TocEntry};
 use crate::layout::{layout, TermInfo};
-use crate::render::blocks::emit_block;
-use crate::render::inline::{disp_width, emit_inlines, link_hits, uppercase_inlines};
+use crate::render::blocks::{emit_block, line_width, split_lines};
+use crate::render::inline::{emit_inlines, link_hits, uppercase_inlines};
 use crate::render::paint::{cell_width, current_row, dim_style, heading_style, hrule, indent_op, Hit, HitAction};
 
 // Title slide: the heading sits in a bordered box at the normal slide margin and
@@ -17,7 +17,7 @@ pub(crate) fn render(
     let (margin, content_w) = layout(term);
     let pre = " ".repeat(margin);
 
-    // The box fits the widest title line, capped to the zen column.
+    // Wrap the title to the zen column, then size the box to the widest wrapped line.
     let lines: Vec<Vec<Inline>> = slide
         .blocks
         .iter()
@@ -27,13 +27,17 @@ pub(crate) fn render(
         })
         .flat_map(|inls| split_breaks(&inls))
         .collect();
-    let inner = lines
+    let cap = content_w.saturating_sub(4).max(1);
+    let box_term = term.with_cols(cap);
+    let vlines: Vec<Vec<RenderOp>> = lines
         .iter()
-        .map(|l| disp_width(l))
-        .max()
-        .unwrap_or(0)
-        .min(content_w.saturating_sub(4))
-        .max(1);
+        .flat_map(|line| {
+            let mut sub = Vec::new();
+            emit_inlines(line, heading_style(), &box_term, deck_dir, 0, 0, &mut sub);
+            split_lines(sub)
+        })
+        .collect();
+    let inner = vlines.iter().map(|v| line_width(v)).max().unwrap_or(0).max(1);
 
     let mut ops = Vec::new();
     ops.push(RenderOp::LineBreak); // top padding
@@ -42,11 +46,11 @@ pub(crate) fn render(
         Style::default(),
     ));
     ops.push(RenderOp::LineBreak);
-    for line in &lines {
+    for line in vlines {
+        let w = line_width(&line);
         ops.push(RenderOp::Text(format!("{pre}│ "), Style::default()));
-        emit_inlines(line, heading_style(), term, deck_dir, 0, 0, &mut ops);
-        let slack = inner.saturating_sub(disp_width(line));
-        ops.push(RenderOp::Text(format!("{} │", " ".repeat(slack)), Style::default()));
+        ops.extend(line);
+        ops.push(RenderOp::Text(format!("{} │", " ".repeat(inner - w)), Style::default()));
         ops.push(RenderOp::LineBreak);
     }
     ops.push(RenderOp::Text(
