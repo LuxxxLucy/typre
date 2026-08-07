@@ -71,11 +71,12 @@ pub(crate) fn emit_block(
         Block::Image { src, alt } => {
             let png_path = deck_dir.join(src);
             if png_path.exists() {
-                let (cols, _) = place_image(ops, png_path, term, indent, Width::Natural);
+                place_image(ops, png_path, term, indent, Width::Natural);
                 if !alt.is_empty() {
+                    let content_w = (term.cols as usize).saturating_sub(indent);
                     ops.push(indent_op(indent));
                     ops.push(RenderOp::Text(
-                        pad(alt, cols as usize, Align::Center),
+                        pad(alt, content_w, Align::Center),
                         Style {
                             italic: true,
                             ..Style::default()

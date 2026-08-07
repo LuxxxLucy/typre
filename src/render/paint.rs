@@ -98,7 +98,9 @@ pub(crate) fn place_image(
     width: Width,
 ) -> (u16, u16) {
     let (cols, rows) = image_cells(&png_path, term, indent, width);
-    ops.push(indent_op(indent));
+    let content_w = (term.cols as usize).saturating_sub(indent);
+    let slack = content_w.saturating_sub(cols as usize) / 2;
+    ops.push(indent_op(indent + slack));
     ops.push(RenderOp::Image { png_path, cols, rows });
     advance_rows(ops, rows);
     (cols, rows)
