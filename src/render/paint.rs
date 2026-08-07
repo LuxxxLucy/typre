@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::core::ir::{Align, RenderOp, Style, Width};
-use crate::layout::{viewport, TermInfo};
+use crate::layout::TermInfo;
 
 // Terminal cell width: CJK and other wide glyphs occupy two columns.
 pub(crate) fn cell_width(s: &str) -> usize {
@@ -51,14 +51,13 @@ pub(crate) fn current_row(ops: &[RenderOp]) -> usize {
 }
 
 // Size an image in cells. Natural shrinks to fit the column; Percent/Cols target
-// that width. Both axes scale by one factor (aspect preserved), bounded by
-// `avail_rows` so the image clears the footer.
+// that width. Width alone sets the scale; the height follows the aspect ratio,
+// and a slide taller than the viewport scrolls.
 pub(crate) fn image_cells(
     png_path: &Path,
     term: &TermInfo,
     indent: usize,
     width: Width,
-    avail_rows: usize,
 ) -> (u16, u16) {
     let cell_w = term.cell_w_px.max(1) as f32;
     let cell_h = term.cell_h_px.max(1) as f32;
@@ -66,16 +65,12 @@ pub(crate) fn image_cells(
     let nat_cols = (w as f32 / cell_w).max(1.0);
     let nat_rows = (h as f32 / cell_h).max(1.0);
     let content_w = (term.cols as usize).saturating_sub(indent).max(1) as f32;
-    let max_rows = avail_rows.max(1) as f32;
     let target_cols = match width {
         Width::Natural => nat_cols.min(content_w),
         Width::Percent(p) => content_w * (p as f32 / 100.0),
         Width::Cols(c) => (c as f32).min(content_w),
     };
-    let mut scale = target_cols / nat_cols;
-    if nat_rows * scale > max_rows {
-        scale = max_rows / nat_rows;
-    }
+    let scale = target_cols / nat_cols;
     let cols = (nat_cols * scale).round().max(1.0) as u16;
     let rows = (nat_rows * scale).round().max(1.0) as u16;
     (cols, rows)
@@ -102,8 +97,7 @@ pub(crate) fn place_image(
     indent: usize,
     width: Width,
 ) -> (u16, u16) {
-    let avail = viewport(term).saturating_sub(current_row(ops));
-    let (cols, rows) = image_cells(&png_path, term, indent, width, avail);
+    let (cols, rows) = image_cells(&png_path, term, indent, width);
     ops.push(indent_op(indent));
     ops.push(RenderOp::Image { png_path, cols, rows });
     advance_rows(ops, rows);
