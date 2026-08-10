@@ -596,8 +596,13 @@ fn emit_table(
     };
 
     push_line(border('┌', '┬', '┐'), ops);
-    emit_row(&head_cells, heading_style(), ops);
-    push_line(border('├', '┼', '┤'), ops);
+    // Markdown has no headerless table: the delimiter row is required and the first row is
+    // the header. A header left empty is how one is asked for, so the row and the rule under
+    // it are dropped, and the top rule opens the body.
+    if head.iter().any(|cell| !cell.is_empty()) {
+        emit_row(&head_cells, heading_style(), ops);
+        push_line(border('├', '┼', '┤'), ops);
+    }
     for (i, row) in body_cells.iter().enumerate() {
         if i > 0 {
             push_line(gap.clone(), ops);

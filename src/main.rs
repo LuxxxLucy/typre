@@ -841,6 +841,29 @@ mod tests {
     }
 
     #[test]
+    fn a_table_with_an_empty_header_draws_its_body_alone() {
+        let deck = parse("| | |\n|:--|:--|\n| a | 1 |\n");
+        let f = frame(
+            &deck.slides[0],
+            &term(),
+            Path::new("."),
+            0,
+            1,
+            &Meta::default(),
+            &HashSet::new(),
+            0,
+        );
+        let txt: Vec<String> = split_lines(f.ops)
+            .iter()
+            .map(|l| ops_text(l))
+            .filter(|l| l.contains('│') || l.contains('┌') || l.contains('└'))
+            .collect();
+        assert!(!txt.iter().any(|l| l.contains('├')), "no header rule: {txt:?}");
+        assert!(txt[0].contains('┌'), "the top rule opens the body: {txt:?}");
+        assert_eq!(txt.len(), 3, "a top rule, one row, a bottom rule: {txt:?}");
+    }
+
+    #[test]
     fn a_closed_details_box_glows_and_an_open_one_does_not() {
         let deck = parse("◊details[Summary]{\nbody line\n}\n");
         let slide = &deck.slides[0];

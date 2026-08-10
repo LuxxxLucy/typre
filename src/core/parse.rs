@@ -312,11 +312,33 @@ fn extract_typst(md: &str) -> (String, Vec<Frag>) {
         } else if fenced {
             out.push_str(line);
         } else {
+            if let Some(head) = missing_head(line, buf.lines().last()) {
+                buf.push_str(&head);
+            }
             buf.push_str(line);
         }
     }
     extract_commands(&buf, &mut out, &mut frags);
     (out, frags)
+}
+
+// A table written with no header at all, opening straight at its delimiter row, is not a
+// table to markdown: the delimiter has to follow a header row. Supply an empty one, which
+// draws as the body under a top rule. `prev` is the line before, absent at the top of the
+// document; a delimiter row after any line holding a `|` already has its header.
+fn missing_head(line: &str, prev: Option<&str>) -> Option<String> {
+    let t = line.trim();
+    if !t.starts_with('|') || !t.contains('-') {
+        return None;
+    }
+    if !t.chars().all(|c| matches!(c, '|' | '-' | ':' | ' ')) {
+        return None;
+    }
+    if prev.is_some_and(|p| p.contains('|')) {
+        return None;
+    }
+    let cols = t.trim_matches('|').split('|').count();
+    Some(format!("|{}\n", " |".repeat(cols)))
 }
 
 // Split art into literal line runs and the blocks its ◊ commands parse to. A command has
@@ -563,6 +585,18 @@ mod tests {
                 .any(|i| matches!(i, Inline::InlineTypst { src, .. } if src == "a_b^*c*")),
             "typst body with markdown-active chars survives verbatim"
         );
+    }
+
+    #[test]
+    fn a_table_may_open_at_its_delimiter_row() {
+        let deck = parse("|:--|:--|\n| a | 1 |\n| b | 2 |\n");
+        match &deck.slides[0].blocks[0] {
+            Block::Table { head, rows, .. } => {
+                assert!(head.iter().all(|cell| cell.is_empty()), "an empty header: {head:?}");
+                assert_eq!(rows.len(), 2, "both lines are body rows");
+            }
+            other => panic!("expected a table, got {other:?}"),
+        }
     }
 
     #[test]
