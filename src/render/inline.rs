@@ -140,6 +140,7 @@ fn push_words(toks: &mut Vec<Tok>, text: &str, style: Style) {
 
 fn merge(a: Style, b: Style) -> Style {
     Style {
+        glow: a.glow || b.glow,
         bold: a.bold || b.bold,
         italic: a.italic || b.italic,
         underline: a.underline || b.underline,
@@ -149,13 +150,13 @@ fn merge(a: Style, b: Style) -> Style {
     }
 }
 
-// Click targets, found by replaying the body's cursor motion so each target's row and column
-// span are known without threading state through emit. A details box marks its summary row
-// with a ToggleTarget op, so a box at any nesting depth lands on the right row.
-pub(crate) fn hits(ops: &[RenderOp]) -> Vec<Hit> {
-    let mut hits = Vec::new();
+// Replay the cursor motion of an op stream: where on screen each op lands. Both the click
+// targets and the glowing runs are read off this, so neither has to track rows itself.
+pub(crate) fn positions(ops: &[RenderOp]) -> Vec<(u16, u16, &RenderOp)> {
+    let mut out = Vec::new();
     let (mut row, mut col) = (0u16, 0u16);
     for op in ops {
+        out.push((row, col, op));
         match op {
             RenderOp::LineBreak => {
                 row += 1;
@@ -163,24 +164,53 @@ pub(crate) fn hits(ops: &[RenderOp]) -> Vec<Hit> {
             }
             RenderOp::Text(t, _) => col += cell_width(t) as u16,
             RenderOp::InlineImage { cols, .. } => col += cols,
-            RenderOp::Link { label, url, .. } => {
-                let w = cell_width(label) as u16;
-                hits.push(Hit {
-                    row,
-                    cols: col..col + w,
-                    action: HitAction::OpenUrl(url.clone()),
-                });
-                col += w;
-            }
-            RenderOp::ToggleTarget(id) => hits.push(Hit {
+            RenderOp::Link { label, .. } => col += cell_width(label) as u16,
+            _ => {}
+        }
+    }
+    out
+}
+
+// A link's label span, and a details box's summary row, are what a click can land on.
+pub(crate) fn hits(ops: &[RenderOp]) -> Vec<Hit> {
+    positions(ops)
+        .into_iter()
+        .filter_map(|(row, col, op)| match op {
+            RenderOp::Link { label, url, .. } => Some(Hit {
+                row,
+                cols: col..col + cell_width(label) as u16,
+                action: HitAction::OpenUrl(url.clone()),
+            }),
+            RenderOp::ToggleTarget(id) => Some(Hit {
                 row,
                 cols: 0..u16::MAX,
                 action: HitAction::ToggleDetails(*id),
             }),
-            _ => {}
-        }
-    }
-    hits
+            _ => None,
+        })
+        .collect()
+}
+
+// One run of glowing text and where it sits, so a frame can be recoloured in place without
+// laying the slide out again or transmitting its images a second time.
+pub struct GlowRun {
+    pub row: u16,
+    pub col: u16,
+    pub text: String,
+}
+
+pub(crate) fn glow_runs(ops: &[RenderOp]) -> Vec<GlowRun> {
+    positions(ops)
+        .into_iter()
+        .filter_map(|(row, col, op)| match op {
+            RenderOp::Text(t, style) if style.glow => Some(GlowRun {
+                row,
+                col,
+                text: t.clone(),
+            }),
+            _ => None,
+        })
+        .collect()
 }
 
 pub(crate) fn uppercase_inlines(inls: &[Inline]) -> Vec<Inline> {

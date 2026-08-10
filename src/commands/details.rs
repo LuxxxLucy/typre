@@ -56,5 +56,8 @@ pub(crate) fn render(
         .max()
         .unwrap_or(0)
         .min(avail);
-    emit_box(vlines, inner, indent, &BoxDeco::bordered(inner), ops);
+    let mut deco = BoxDeco::bordered(inner);
+    // a closed box shimmers, an open one is a plain frame
+    deco.frame.glow = !open;
+    emit_box(vlines, inner, indent, &deco, ops);
 }

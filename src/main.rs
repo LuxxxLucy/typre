@@ -30,7 +30,8 @@ use crate::core::{ir, parse};
 use crate::layout::{layout, viewport, TermInfo};
 use crate::precompile::typst_precompile_errors;
 use crate::render::paint::{cell_width, char_cells, dim_style, heading_style, hrule, pad, Hit, HitAction};
-use crate::term::emit;
+use crate::render::inline::{glow_runs, GlowRun};
+use crate::term::{emit, paint_glow};
 
 #[derive(Parser)]
 #[command(about = "Terminal typst slideshow")]
@@ -587,7 +588,7 @@ fn present(deck_path: &Path, deck_dir: &Path, out: &mut impl Write) -> Result<()
     let mut open: HashMap<usize, HashSet<usize>> = HashMap::new();
     let mut scroll = 0usize;
     let empty = HashSet::new();
-    let (mut hits, mut height) =
+    let (mut hits, mut height, mut glow) =
         draw(&deck, deck_dir, &term, nav.page(), help, scroll, &empty, out)?;
     // Ghostty truncates a freshly-transmitted image on its cold first decode; a second
     // paint of the same content shows it in full. After any content change we repaint
@@ -692,11 +693,14 @@ fn present(deck_path: &Path, deck_dir: &Path, out: &mut impl Write) -> Result<()
 
         if dirty || settle {
             let cur = open.get(&nav.page()).unwrap_or(&empty);
-            let (h, ht) = draw(&deck, deck_dir, &term, nav.page(), help, scroll, cur, out)?;
+            let (h, ht, g) = draw(&deck, deck_dir, &term, nav.page(), help, scroll, cur, out)?;
             hits = h;
             height = ht;
+            glow = g;
             // Arm the one-shot warm-up repaint only when this draw showed new content.
             settle = dirty;
+        } else if !glow.is_empty() {
+            paint_glow(out, &glow)?;
         }
     }
     Ok(())
@@ -712,7 +716,7 @@ fn draw(
     scroll: usize,
     open: &HashSet<usize>,
     out: &mut impl Write,
-) -> Result<(Vec<Hit>, usize)> {
+) -> Result<(Vec<Hit>, usize, Vec<GlowRun>)> {
     let total = deck.slides.len().max(1);
     queue!(
         out,
@@ -721,11 +725,16 @@ fn draw(
     )?;
     let mut hits = Vec::new();
     let mut height = 0;
+    let mut glow = Vec::new();
     if let Some(slide) = deck.slides.get(idx) {
         let f = frame(slide, term, deck_dir, idx, total, &deck.meta, open, scroll);
         emit(&f.ops, out)?;
         hits = f.hits;
         height = f.height;
+        // the overlay covers the slide, so nothing under it may repaint
+        if !help {
+            glow = glow_runs(&f.ops);
+        }
     }
     if help {
         emit(&help_overlay(term), out)?;
@@ -733,7 +742,7 @@ fn draw(
     let pct = ((idx + 1) * 100 / total).min(100);
     write!(out, "\x1b]9;4;1;{pct}\x1b\\")?; // terminal progress bar for slide position
     out.flush()?;
-    Ok((hits, height))
+    Ok((hits, height, glow))
 }
 
 #[cfg(test)]
@@ -829,6 +838,33 @@ mod tests {
         assert_eq!(command_for(KeyCode::Char('c'), true), Command::Quit);
         assert_eq!(command_for(KeyCode::Esc, false), Command::Cancel);
         assert_eq!(command_for(KeyCode::Char('?'), false), Command::ToggleHelp);
+    }
+
+    #[test]
+    fn a_closed_details_box_glows_and_an_open_one_does_not() {
+        let deck = parse("◊details[Summary]{\nbody line\n}\n");
+        let slide = &deck.slides[0];
+        let closed = frame(
+            slide,
+            &term(),
+            Path::new("."),
+            0,
+            1,
+            &Meta::default(),
+            &HashSet::new(),
+            0,
+        );
+        let runs = glow_runs(&closed.ops);
+        assert!(!runs.is_empty(), "a closed box glows");
+        assert!(
+            runs.iter().all(|r| r.text.contains('│') || r.text.contains('┌') || r.text.contains('└')),
+            "only the frame glows, not the text inside"
+        );
+
+        let mut open = HashSet::new();
+        open.insert(0);
+        let shown = frame(slide, &term(), Path::new("."), 0, 1, &Meta::default(), &open, 0);
+        assert!(glow_runs(&shown.ops).is_empty(), "an open box is a plain frame");
     }
 
     #[test]

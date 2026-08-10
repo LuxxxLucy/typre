@@ -5,14 +5,19 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::LazyLock;
+use std::time::Instant;
 
 use anyhow::Result;
 use base64::Engine;
-use crossterm::style::{Attribute, Color, Print, SetAttribute, SetBackgroundColor};
+use crossterm::style::{
+    Attribute, Color, Print, SetAttribute, SetBackgroundColor, SetForegroundColor,
+};
 use crossterm::{cursor, queue, terminal};
 
 use crate::diacritics::DIACRITICS;
 use crate::core::ir::{RenderOp, Style};
+use crate::render::inline::GlowRun;
 use crate::layout::TermInfo;
 
 // A fresh image id per emit. Ghostty's image-id reuse is broken (#6711), so a kept
@@ -104,7 +109,58 @@ pub fn emit(ops: &[RenderOp], out: &mut impl Write) -> Result<()> {
     Ok(())
 }
 
+// Repaint the glowing runs where they stand. Nothing is laid out again and no image is
+// transmitted, so this is cheap enough to do every tick.
+pub fn paint_glow(out: &mut impl Write, runs: &[GlowRun]) -> Result<()> {
+    for run in runs {
+        queue!(out, cursor::MoveTo(run.col, run.row))?;
+        glow_text(out, &run.text)?;
+    }
+    out.flush()?;
+    Ok(())
+}
+
+// One glowing run, in the hue the clock is at. Every run reads the same clock, so all the
+// boxes on a slide hold one colour together, and a redraw picks the shimmer up where it
+// stands instead of restarting it.
+fn glow_text(out: &mut impl Write, text: &str) -> Result<()> {
+    let (r, g, b) = hue(phase());
+    queue!(
+        out,
+        SetForegroundColor(Color::Rgb { r, g, b }),
+        Print(text),
+        SetForegroundColor(Color::Reset)
+    )?;
+    Ok(())
+}
+
+// How far the hue has drifted since the program started. A step per 100ms over 256 steps
+// brings a frame back to its own colour in half a minute, slow enough to read as a shimmer
+// rather than a flicker.
+fn phase() -> u32 {
+    static START: LazyLock<Instant> = LazyLock::new(Instant::now);
+    (START.elapsed().as_millis() / 100) as u32
+}
+
+// One full turn of hue every 256 steps, at full saturation.
+fn hue(t: u32) -> (u8, u8, u8) {
+    let h = t % 256;
+    let seg = h / 43;
+    let f = ((h % 43) * 255 / 43) as u8;
+    match seg {
+        0 => (255, f, 0),
+        1 => (255 - f, 255, 0),
+        2 => (0, 255, f),
+        3 => (0, 255 - f, 255),
+        4 => (f, 0, 255),
+        _ => (255, 0, 255 - f),
+    }
+}
+
 fn emit_text(out: &mut impl Write, text: &str, style: Style) -> Result<()> {
+    if style.glow {
+        return glow_text(out, text);
+    }
     if style.bold {
         queue!(out, SetAttribute(Attribute::Bold))?;
     }

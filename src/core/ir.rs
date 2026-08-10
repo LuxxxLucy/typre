@@ -143,6 +143,8 @@ pub enum Inline {
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Style {
+    // Text that cycles through the spectrum frame by frame, to say a box opens on click.
+    pub glow: bool,
     pub bold: bool,
     pub italic: bool,
     pub underline: bool,
