@@ -157,9 +157,10 @@ fn merge(a: Style, b: Style) -> Style {
     }
 }
 
-// Click targets for hyperlinks, found by replaying the body's cursor motion so
-// each link's row and column span are known without threading state through emit.
-pub(crate) fn link_hits(ops: &[RenderOp]) -> Vec<Hit> {
+// Click targets, found by replaying the body's cursor motion so each target's row and column
+// span are known without threading state through emit. A details box marks its summary row
+// with a ToggleTarget op, so a box at any nesting depth lands on the right row.
+pub(crate) fn hits(ops: &[RenderOp]) -> Vec<Hit> {
     let mut hits = Vec::new();
     let (mut row, mut col) = (0u16, 0u16);
     for op in ops {
@@ -179,6 +180,11 @@ pub(crate) fn link_hits(ops: &[RenderOp]) -> Vec<Hit> {
                 });
                 col += w;
             }
+            RenderOp::ToggleTarget(id) => hits.push(Hit {
+                row,
+                cols: 0..u16::MAX,
+                action: HitAction::ToggleDetails(*id),
+            }),
             _ => {}
         }
     }

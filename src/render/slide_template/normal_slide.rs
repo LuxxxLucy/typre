@@ -1,15 +1,14 @@
 use std::collections::HashSet;
 use std::path::Path;
 
-use crate::core::ir::{Block, RenderOp, Slide};
+use crate::core::ir::{RenderOp, Slide};
 use crate::layout::{layout, TermInfo};
-use crate::render::blocks::emit_block;
-use crate::commands;
-use crate::render::inline::link_hits;
+use crate::render::blocks::{emit_block, Toggles};
+use crate::render::inline::hits as click_hits;
 use crate::render::paint::Hit;
 
-// A normal slide: top padding, then each block at the content margin. Top-level
-// details boxes toggle (their click target is returned); links are click targets.
+// A normal slide: top padding, then each block at the content margin. Details boxes and links
+// are click targets.
 pub(crate) fn render(
     slide: &Slide,
     term: &TermInfo,
@@ -17,32 +16,15 @@ pub(crate) fn render(
     open: &HashSet<usize>,
 ) -> (Vec<RenderOp>, Vec<Hit>) {
     let mut ops = Vec::new();
-    let mut hits = Vec::new();
+    let mut hits: Vec<Hit> = Vec::new();
     let (margin, content_w) = layout(term);
     let body = term.with_cols(margin + content_w);
     ops.push(RenderOp::LineBreak); // top padding
-    let mut details_id = 0usize;
+    let mut tg = Toggles { open, next_id: 0 };
     for block in &slide.blocks {
-        match block {
-            Block::Details { summary, body: lines } => {
-                let id = details_id;
-                details_id += 1;
-                if let Some(hit) = commands::details::render(
-                    Some(id),
-                    open.contains(&id),
-                    summary,
-                    lines,
-                    &body,
-                    margin,
-                    &mut ops,
-                ) {
-                    hits.push(hit);
-                }
-            }
-            _ => emit_block(block, &body, deck_dir, margin, &mut ops),
-        }
+        emit_block(block, &body, deck_dir, margin, &mut tg, &mut ops);
         ops.push(RenderOp::LineBreak);
     }
-    hits.extend(link_hits(&ops));
+    hits.extend(click_hits(&ops));
     (ops, hits)
 }

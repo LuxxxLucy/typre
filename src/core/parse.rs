@@ -1,7 +1,7 @@
 use pulldown_cmark::{Alignment, CodeBlockKind, Event, HeadingLevel, Options, Parser, Tag, TagEnd};
 
 use crate::commands::{parse_command, Frag};
-use crate::core::ir::{Align, Block, Deck, Inline, Meta, Slide, Style, Width};
+use crate::core::ir::{Align, ArtPart, Block, Deck, Inline, Meta, Slide, Style, Width, GUIDE};
 
 pub fn parse(md: &str) -> Deck {
     let (md, frags) = extract_typst(md);
@@ -119,8 +119,14 @@ pub fn parse(md: &str) -> Deck {
                 if src.ends_with('\n') {
                     src.pop();
                 }
-                let lang = code_lang.take();
-                push_block(&mut block_stack, Block::Code { src, lang });
+                let block = match code_lang.take() {
+                    Some(lang) => Block::Code { src, lang },
+                    None => Block::Art {
+                        parts: art_parts(&src),
+                        caption: String::new(),
+                    },
+                };
+                push_block(&mut block_stack, block);
             }
 
             Event::Start(Tag::Image { dest_url, .. }) => {
@@ -312,6 +318,65 @@ fn extract_typst(md: &str) -> (String, Vec<Frag>) {
     }
     extract_commands(&buf, &mut out, &mut frags);
     (out, frags)
+}
+
+// Split art into literal line runs and the blocks its ◊ commands parse to. A command has
+// to sit alone on its line, since the block it renders is several lines tall; the leading
+// whitespace and guides of that line become the block's prefix, and are stripped from the
+// lines of its body. Anything else stays literal.
+pub(crate) fn art_parts(src: &str) -> Vec<ArtPart> {
+    let mut parts = Vec::new();
+    let mut lines: Vec<String> = Vec::new();
+    let raw: Vec<&str> = src.lines().collect();
+    let mut i = 0;
+    while i < raw.len() {
+        match command_at(&raw[i..]) {
+            Some((guide, block, used)) => {
+                if !lines.is_empty() {
+                    parts.push(ArtPart::Lines(std::mem::take(&mut lines)));
+                }
+                parts.push(ArtPart::Nested {
+                    guide,
+                    block: Box::new(block),
+                });
+                i += used;
+            }
+            None => {
+                lines.push(raw[i].to_string());
+                i += 1;
+            }
+        }
+    }
+    if !lines.is_empty() {
+        parts.push(ArtPart::Lines(lines));
+    }
+    parts
+}
+
+// A ◊ command opening on the first of `raw`, preceded on that line by guides only: its
+// prefix, the block it parses to, and how many lines it spans. The lines are dedented by
+// the prefix first, so a body written under a `│` branch does not carry the branch.
+fn command_at(raw: &[&str]) -> Option<(String, Block, usize)> {
+    let first = raw[0];
+    let start = first.find('◊')?;
+    let guide = &first[..start];
+    if !guide.chars().all(|c| GUIDE.contains(c)) {
+        return None;
+    }
+    let dedented: Vec<&str> = raw
+        .iter()
+        .map(|l| l.strip_prefix(guide).unwrap_or(l))
+        .collect();
+    let body = dedented.join("\n");
+    let after = &body[body.find('◊')? + '◊'.len_utf8()..];
+    let (frag, consumed) = parse_command(after)?;
+    let block = match frag {
+        Frag::Block(b) => b,
+        Frag::Inline { src, width } => Block::BlockTypst { src, width },
+    };
+    let end = body.len() - after.len() + consumed;
+    let used = body[..end].matches('\n').count() + 1;
+    Some((guide.to_string(), block, used))
 }
 
 fn extract_commands(text: &str, out: &mut String, frags: &mut Vec<Frag>) {
@@ -586,9 +651,48 @@ mod tests {
         match &deck.slides[0].blocks[0] {
             Block::Code { src, lang } => {
                 assert_eq!(src, "fn main() {}");
-                assert_eq!(lang.as_deref(), Some("rust"));
+                assert_eq!(lang, "rust");
             }
             other => panic!("expected code, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn fence_without_language_is_art() {
+        let deck = parse("```\n┌───┐\n│ A │\n└───┘\n```\n");
+        match &deck.slides[0].blocks[0] {
+            Block::Art { parts, caption } => {
+                assert!(caption.is_empty());
+                match &parts[..] {
+                    [ArtPart::Lines(l)] => assert_eq!(l, &["┌───┐", "│ A │", "└───┘"]),
+                    other => panic!("expected one run of lines, got {other:?}"),
+                }
+            }
+            other => panic!("expected art, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn art_hosts_a_nested_command() {
+        let deck = parse("```\n├─ branch\n│  ◊details[why]{\n│  because\n│  }\n└─ end\n```\n");
+        let parts = match &deck.slides[0].blocks[0] {
+            Block::Art { parts, .. } => parts,
+            other => panic!("expected art, got {other:?}"),
+        };
+        match &parts[..] {
+            [ArtPart::Lines(a), ArtPart::Nested { guide, block }, ArtPart::Lines(b)] => {
+                assert_eq!(a, &["├─ branch"]);
+                assert_eq!(guide, "│  ");
+                assert_eq!(b, &["└─ end"]);
+                match &**block {
+                    Block::Details { summary, body } => {
+                        assert_eq!(summary, "why");
+                        assert_eq!(body, &["because"]);
+                    }
+                    other => panic!("expected details, got {other:?}"),
+                }
+            }
+            other => panic!("expected lines/nested/lines, got {other:?}"),
         }
     }
 
@@ -645,11 +749,14 @@ mod tests {
     fn figure_parsed() {
         let deck = parse("◊figure[My caption]{\nart\n}\n");
         match &deck.slides[0].blocks[0] {
-            Block::Figure { body, caption } => {
-                assert_eq!(body, "art");
+            Block::Art { parts, caption } => {
                 assert_eq!(caption, "My caption");
+                match &parts[..] {
+                    [ArtPart::Lines(l)] => assert_eq!(l, &["art"]),
+                    other => panic!("expected one run of lines, got {other:?}"),
+                }
             }
-            other => panic!("expected figure, got {other:?}"),
+            other => panic!("expected art, got {other:?}"),
         }
     }
 

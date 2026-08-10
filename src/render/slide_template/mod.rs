@@ -16,7 +16,7 @@ pub fn render(
     open: &HashSet<usize>,
 ) -> (Vec<RenderOp>, Vec<Hit>, usize) {
     let (ops, hits) = if slide.is_title() {
-        title_slide::render(slide, term, deck_dir)
+        title_slide::render(slide, term, deck_dir, open)
     } else {
         normal_slide::render(slide, term, deck_dir, open)
     };

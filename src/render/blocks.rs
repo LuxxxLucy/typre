@@ -1,18 +1,36 @@
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
-use crate::core::ir::{Align, Block, Inline, RenderOp, Style, Width};
+use crate::core::ir::{Align, ArtPart, Block, Inline, RenderOp, Style, Width, GUIDE};
 use crate::layout::{natural_ppi, TermInfo};
 use crate::commands;
 use crate::render::inline::{disp_width, emit_inlines, flat_text, uppercase_inlines};
 use crate::render::paint::{
-    cell_width, code_style, heading_style, image_cells, indent_op, pad, place_image, quote_style,
+    cell_width, char_cells, code_style, heading_style, image_cells, indent_op, pad, place_image,
+    quote_style,
 };
+
+// Details boxes are numbered as they are emitted, at any nesting depth, so a box inside art
+// toggles like one at the top of a slide. `open` holds the ids the user has expanded.
+pub(crate) struct Toggles<'a> {
+    pub open: &'a HashSet<usize>,
+    pub next_id: usize,
+}
+
+impl Toggles<'_> {
+    fn take_id(&mut self) -> usize {
+        let id = self.next_id;
+        self.next_id += 1;
+        id
+    }
+}
 
 pub(crate) fn emit_block(
     block: &Block,
     term: &TermInfo,
     deck_dir: &Path,
     indent: usize,
+    tg: &mut Toggles,
     ops: &mut Vec<RenderOp>,
 ) {
     match block {
@@ -49,23 +67,11 @@ pub(crate) fn emit_block(
             ops.push(RenderOp::LineBreak);
         }
         Block::List { ordered, items } => {
-            emit_list(*ordered, items, "", term, deck_dir, indent, ops);
+            emit_list(*ordered, items, "", term, deck_dir, indent, tg, ops);
         }
-        Block::Code { src, lang } => {
-            if let Some(lang) = lang {
-                ops.push(indent_op(indent));
-                ops.push(RenderOp::Text(format!(" {lang} "), code_label_style()));
-                ops.push(RenderOp::LineBreak);
-            }
-            let w = (term.cols as usize).saturating_sub(indent);
-            for line in src.lines() {
-                ops.push(indent_op(indent));
-                ops.push(RenderOp::Text(
-                    pad(&format!("  {line}"), w, Align::Left),
-                    code_style(),
-                ));
-                ops.push(RenderOp::LineBreak);
-            }
+        Block::Code { src, lang } => emit_code(src, lang, term, indent, ops),
+        Block::Art { parts, caption } => {
+            emit_art(parts, caption, term, deck_dir, indent, tg, ops)
         }
         Block::BlockTypst { src, width } => {
             commands::typst::render_block(src, *width, term, deck_dir, indent, ops)
@@ -103,13 +109,13 @@ pub(crate) fn emit_block(
         Block::Table { aligns, head, rows } => {
             emit_table(aligns, head, rows, term, deck_dir, indent, ops);
         }
-        Block::Quote(inner) => emit_quote(inner, term, deck_dir, indent, ops),
+        Block::Quote(inner) => emit_quote(inner, term, deck_dir, indent, tg, ops),
         Block::Tree(nodes) => commands::tree::render(nodes, indent, ops),
         Block::Grid(cells) => commands::grid::render(cells, term, indent, ops),
-        Block::Figure { body, caption } => commands::figure::render(body, caption, indent, ops),
-        // Details nested in a quote/list render always-open (only top-level toggles).
         Block::Details { summary, body } => {
-            commands::details::render(None, true, summary, body, term, indent, ops);
+            let id = tg.take_id();
+            let open = tg.open.contains(&id);
+            commands::details::render(id, open, summary, body, term, indent, ops);
         }
     }
 }
@@ -119,6 +125,101 @@ fn code_label_style() -> Style {
         bold: true,
         ..code_style()
     }
+}
+
+// A fenced code block: the language as a label, then every line on the panel background,
+// padded to the column.
+fn emit_code(src: &str, lang: &str, term: &TermInfo, indent: usize, ops: &mut Vec<RenderOp>) {
+    let w = (term.cols as usize).saturating_sub(indent).max(1);
+    ops.push(indent_op(indent));
+    ops.push(RenderOp::Text(format!(" {lang} "), code_label_style()));
+    ops.push(RenderOp::LineBreak);
+    for line in src.lines() {
+        ops.push(indent_op(indent));
+        ops.push(RenderOp::Text(
+            pad(&format!("  {line}"), w, Align::Left),
+            code_style(),
+        ));
+        ops.push(RenderOp::LineBreak);
+    }
+}
+
+// ASCII art two spaces in from the margin: literal lines, the blocks its ◊ commands parsed
+// to, and a caption under them if there is one. A nested block is rendered on its own, then
+// every line of it is prefixed with the guides of the line the command sat on, so a details
+// box under a `├─` branch stays under that branch.
+fn emit_art(
+    parts: &[ArtPart],
+    caption: &str,
+    term: &TermInfo,
+    deck_dir: &Path,
+    indent: usize,
+    tg: &mut Toggles,
+    ops: &mut Vec<RenderOp>,
+) {
+    let pre = " ".repeat(indent + 2);
+    let width = (term.cols as usize).saturating_sub(indent + 2).max(1);
+    for part in parts {
+        match part {
+            ArtPart::Lines(lines) => {
+                for line in lines {
+                    emit_art_line(line, &pre, width, Style::default(), ops);
+                }
+            }
+            ArtPart::Nested { guide, block } => {
+                let inner = term.with_cols(width.saturating_sub(cell_width(guide)));
+                let mut sub = Vec::new();
+                emit_block(block, &inner, deck_dir, 0, tg, &mut sub);
+                for line in split_lines(sub) {
+                    ops.push(RenderOp::Text(format!("{pre}{guide}"), Style::default()));
+                    ops.extend(line);
+                    ops.push(RenderOp::LineBreak);
+                }
+            }
+        }
+    }
+    if !caption.is_empty() {
+        let style = Style {
+            italic: true,
+            ..Style::default()
+        };
+        emit_art_line(caption, &pre, width, style, ops);
+    }
+}
+
+// A line that fits is emitted byte-for-byte, so diagram spacing survives. An overrunning
+// line of prose wraps, and the continuation repeats the line's own indent and vertical
+// guides so prose written under a tree branch stays under it. An overrunning line that
+// draws (a box side, an arrow) runs into the margin instead: reflowing it breaks the art.
+fn emit_art_line(line: &str, pre: &str, width: usize, style: Style, ops: &mut Vec<RenderOp>) {
+    let push = |s: String, ops: &mut Vec<RenderOp>| {
+        ops.push(RenderOp::Text(format!("{pre}{s}"), style));
+        ops.push(RenderOp::LineBreak);
+    };
+    let split = line
+        .char_indices()
+        .find(|(_, c)| !GUIDE.contains(*c))
+        .map_or(line.len(), |(i, _)| i);
+    let (guide, text) = line.split_at(split);
+    if cell_width(line) <= width || text.chars().any(draws) {
+        push(line.to_string(), ops);
+        return;
+    }
+    let cont: String = guide
+        .chars()
+        .map(|c| if "│├┼┬┌".contains(c) { '│' } else { ' ' })
+        .collect();
+    let body_w = width.saturating_sub(cell_width(guide)).max(1);
+    for (i, seg) in wrap_text(text, body_w).into_iter().enumerate() {
+        let lead = if i == 0 { guide } else { &cont };
+        push(format!("{lead}{seg}"), ops);
+    }
+}
+
+// Arrows, box drawing, block elements, geometric shapes: past the leading guides, any of
+// these means the line is part of a drawing.
+fn draws(c: char) -> bool {
+    matches!(c, '\u{2190}'..='\u{21ff}' | '\u{2500}'..='\u{25ff}')
 }
 
 // A single-column box: content wrapped into `vlines` framed at width `inner`, with
@@ -164,12 +265,19 @@ pub(crate) fn emit_box(
 
 // A blockquote: a grey background box spanning the content width, one space of
 // inset each side, with a blank row above and below.
-fn emit_quote(inner: &[Block], term: &TermInfo, deck_dir: &Path, indent: usize, ops: &mut Vec<RenderOp>) {
+fn emit_quote(
+    inner: &[Block],
+    term: &TermInfo,
+    deck_dir: &Path,
+    indent: usize,
+    tg: &mut Toggles,
+    ops: &mut Vec<RenderOp>,
+) {
     let text_w = (term.cols as usize).saturating_sub(indent + 2).max(1);
     let inner_term = term.with_cols(text_w);
     let mut sub = Vec::new();
     for b in inner {
-        emit_block(b, &inner_term, deck_dir, 0, &mut sub);
+        emit_block(b, &inner_term, deck_dir, 0, tg, &mut sub);
     }
     let q = quote_style();
     let deco = BoxDeco {
@@ -224,6 +332,7 @@ fn shade(op: RenderOp, bg: Style) -> RenderOp {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn emit_list(
     ordered: bool,
     items: &[Vec<Block>],
@@ -231,6 +340,7 @@ fn emit_list(
     term: &TermInfo,
     deck_dir: &Path,
     indent: usize,
+    tg: &mut Toggles,
     ops: &mut Vec<RenderOp>,
 ) {
     for (i, item) in items.iter().enumerate() {
@@ -257,9 +367,9 @@ fn emit_list(
                     ops.push(RenderOp::LineBreak);
                 }
                 Block::List { ordered: o, items } => {
-                    emit_list(*o, items, &item_prefix, term, deck_dir, cont, ops);
+                    emit_list(*o, items, &item_prefix, term, deck_dir, cont, tg, ops);
                 }
-                nested => emit_block(nested, term, deck_dir, cont, ops),
+                nested => emit_block(nested, term, deck_dir, cont, tg, ops),
             }
         }
     }
@@ -381,7 +491,7 @@ fn emit_table(
     };
     let emit_row = |cells: &[Cell], style: Style, ops: &mut Vec<RenderOp>| {
         let wrapped: Vec<Vec<String>> = (0..ncol)
-            .map(|c| wrap_cell(&cells[c].text, widths[c]))
+            .map(|c| wrap_text(&cells[c].text, widths[c]))
             .collect();
         let fig_rows = |c: usize| cells[c].fig.as_ref().map_or(0, |f| f.rows as usize);
         let height = (0..ncol)
@@ -440,54 +550,57 @@ fn emit_table(
     push_line(border('└', '┴', '┘'), ops);
 }
 
-// Greedy word wrap to `w` display columns, hard-splitting any single word too wide.
-fn wrap_cell(s: &str, w: usize) -> Vec<String> {
+// Greedy wrap to `w` display columns. A line may break at a space or between wide (CJK)
+// characters, matching the paragraph flow; a narrow-script word wider than the column is
+// split mid-word, since nothing else fits.
+pub(crate) fn wrap_text(s: &str, w: usize) -> Vec<String> {
     let w = w.max(1);
-    let mut pieces: Vec<String> = Vec::new();
-    for word in s.split_whitespace() {
-        if cell_width(word) <= w {
-            pieces.push(word.to_string());
-        } else {
-            pieces.extend(hard_split(word, w));
-        }
-    }
-    let mut lines: Vec<String> = Vec::new();
+    let mut lines = Vec::new();
     let mut cur = String::new();
-    for p in pieces {
-        if cur.is_empty() {
-            cur = p;
-        } else if cell_width(&cur) + 1 + cell_width(&p) <= w {
-            cur.push(' ');
-            cur.push_str(&p);
-        } else {
+    let mut col = 0usize;
+    for (unit, uw) in break_units(s) {
+        if col + uw > w && col > 0 {
             lines.push(std::mem::take(&mut cur));
-            cur = p;
+            col = 0;
+            if unit == " " {
+                continue;
+            }
+        }
+        for c in unit.chars() {
+            let cw = char_cells(c).max(1);
+            if col + cw > w && col > 0 {
+                lines.push(std::mem::take(&mut cur));
+                col = 0;
+            }
+            cur.push(c);
+            col += cw;
         }
     }
-    if !cur.is_empty() {
+    if !cur.is_empty() || lines.is_empty() {
         lines.push(cur);
-    }
-    if lines.is_empty() {
-        lines.push(String::new());
     }
     lines
 }
 
-fn hard_split(word: &str, w: usize) -> Vec<String> {
+// A space, one wide character, or one run of narrow characters: the units a line may
+// break between.
+fn break_units(s: &str) -> Vec<(String, usize)> {
     let mut out = Vec::new();
-    let mut cur = String::new();
-    let mut cw = 0;
-    for ch in word.chars() {
-        let cc = cell_width(&ch.to_string());
-        if cw + cc > w && !cur.is_empty() {
-            out.push(std::mem::take(&mut cur));
-            cw = 0;
+    let mut word = String::new();
+    let flush = |word: &mut String, out: &mut Vec<(String, usize)>| {
+        if !word.is_empty() {
+            let w = cell_width(word);
+            out.push((std::mem::take(word), w));
         }
-        cur.push(ch);
-        cw += cc;
+    };
+    for c in s.chars() {
+        if c == ' ' || char_cells(c) >= 2 {
+            flush(&mut word, &mut out);
+            out.push((c.to_string(), char_cells(c).max(1)));
+        } else {
+            word.push(c);
+        }
     }
-    if !cur.is_empty() {
-        out.push(cur);
-    }
+    flush(&mut word, &mut out);
     out
 }

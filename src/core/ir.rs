@@ -43,7 +43,13 @@ pub enum Block {
     },
     Code {
         src: String,
-        lang: Option<String>,
+        lang: String,
+    },
+    // ASCII art: the literal lines of a language-less fence, and the ◊ commands nested
+    // between them. `◊figure` is the same block with a caption.
+    Art {
+        parts: Vec<ArtPart>,
+        caption: String,
     },
     BlockTypst {
         src: String,
@@ -62,14 +68,22 @@ pub enum Block {
     },
     Tree(Vec<TreeNode>),
     Grid(Vec<String>),
-    Figure {
-        body: String,
-        caption: String,
-    },
     Details {
         summary: String,
         body: Vec<String>,
     },
+}
+
+// The characters that may lead an art line before its content: indentation and the vertical
+// guides of a hand-drawn tree.
+pub(crate) const GUIDE: &str = " \t│├└┌┬┴┼─";
+
+// One stretch of an art block. A nested command keeps the leading whitespace and vertical
+// guides of the line it sat on, and every line it renders carries them.
+#[derive(Debug, Clone)]
+pub enum ArtPart {
+    Lines(Vec<String>),
+    Nested { guide: String, block: Box<Block> },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -143,5 +157,7 @@ pub enum RenderOp {
         url: String,
         style: Style,
     },
+    // Zero-width: the row it lands on toggles details box `id` when clicked.
+    ToggleTarget(usize),
     ClearImages,
 }

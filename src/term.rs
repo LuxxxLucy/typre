@@ -96,6 +96,8 @@ pub fn emit(ops: &[RenderOp], out: &mut impl Write) -> Result<()> {
                 row,
             } => emit_inline_image(out, png_path, *cols, *rows, *row, &mut placed)?,
             RenderOp::Link { label, url, style } => emit_link(out, label, url, *style)?,
+            // A click target only; it draws nothing.
+            RenderOp::ToggleTarget(_) => {}
         }
     }
     out.flush()?;

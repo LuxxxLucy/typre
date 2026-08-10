@@ -1,6 +1,6 @@
 use crate::core::ir::{Align, Block, RenderOp, Style};
 use crate::layout::TermInfo;
-use crate::render::paint::{cell_width, current_row, heading_style, hrule, pad, Hit, HitAction};
+use crate::render::paint::{cell_width, heading_style, hrule, pad};
 
 use super::{bracket_cmd, Frag};
 
@@ -16,21 +16,19 @@ fn build(summary: &str, body: &str) -> Block {
     }
 }
 
-// A collapsible details box. `id` is Some for a top-level toggle (returns its
-// click target) and None for an always-open nested box (no target). The body is
-// drawn only when open; a `▸`/`▾` marker shows the state.
-#[allow(clippy::too_many_arguments)]
+// A collapsible details box. Its summary row carries the click target for `id`; the body is
+// drawn only when open, and a `⊕`/`⊖` marker shows the state.
 pub(crate) fn render(
-    id: Option<usize>,
+    id: usize,
     open: bool,
     summary: &str,
     body: &[String],
     term: &TermInfo,
     indent: usize,
     ops: &mut Vec<RenderOp>,
-) -> Option<Hit> {
+) {
     let avail = (term.cols as usize).saturating_sub(indent + 2);
-    let marker = if open { "▾" } else { "▸" };
+    let marker = if open { "⊖" } else { "⊕" };
     let summary_line = format!("{marker} {summary}");
     // body lines align under the summary text, past the marker and its space
     let body_indent = 2;
@@ -50,11 +48,7 @@ pub(crate) fn render(
         ops.push(RenderOp::LineBreak);
     };
     line(hrule('┌', content_w + 2, '┐'), Style::default(), ops);
-    let hit = id.map(|id| Hit {
-        row: current_row(ops) as u16,
-        cols: 0..u16::MAX,
-        action: HitAction::ToggleDetails(id),
-    });
+    ops.push(RenderOp::ToggleTarget(id));
     ops.push(RenderOp::Text(format!("{pre}│ "), Style::default()));
     ops.push(RenderOp::Text(
         pad(&summary_line, content_w, Align::Left),
@@ -75,5 +69,4 @@ pub(crate) fn render(
         }
     }
     line(hrule('└', content_w + 2, '┘'), Style::default(), ops);
-    hit
 }

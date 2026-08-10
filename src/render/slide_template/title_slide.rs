@@ -1,9 +1,10 @@
+use std::collections::HashSet;
 use std::path::Path;
 
 use crate::core::ir::{Block, Inline, RenderOp, Slide, Style, TocEntry};
 use crate::layout::{layout, TermInfo};
-use crate::render::blocks::{emit_block, emit_box, line_width, split_lines, BoxDeco};
-use crate::render::inline::{emit_inlines, link_hits, uppercase_inlines};
+use crate::render::blocks::{emit_block, emit_box, line_width, split_lines, BoxDeco, Toggles};
+use crate::render::inline::{emit_inlines, hits as click_hits, uppercase_inlines};
 use crate::render::paint::{cell_width, current_row, dim_style, heading_style, hrule, indent_op, Hit, HitAction};
 
 // Title slide: the heading sits in a bordered box at the normal slide margin and
@@ -13,6 +14,7 @@ pub(crate) fn render(
     slide: &Slide,
     term: &TermInfo,
     deck_dir: &Path,
+    open: &HashSet<usize>,
 ) -> (Vec<RenderOp>, Vec<Hit>) {
     let (margin, content_w) = layout(term);
 
@@ -53,16 +55,17 @@ pub(crate) fn render(
     let mut hits = emit_toc(&slide.toc, content_w, margin, &mut ops);
 
     let body = term.with_cols(margin + content_w);
+    let mut tg = Toggles { open, next_id: 0 };
     for block in &slide.blocks {
         if matches!(block, Block::Heading(_, _)) {
             continue;
         }
         ops.push(RenderOp::LineBreak); // blank line above each block
-        emit_block(block, &body, deck_dir, margin, &mut ops);
+        emit_block(block, &body, deck_dir, margin, &mut tg, &mut ops);
         ops.push(RenderOp::LineBreak);
     }
 
-    hits.extend(link_hits(&ops));
+    hits.extend(click_hits(&ops));
     (ops, hits)
 }
 
