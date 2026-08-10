@@ -832,6 +832,27 @@ mod tests {
     }
 
     #[test]
+    fn a_link_inside_a_figure_is_clickable() {
+        let deck = parse("◊figure{\n│  see [docs](https://x.test)\n}\n");
+        let f = frame(
+            &deck.slides[0],
+            &term(),
+            Path::new("."),
+            0,
+            1,
+            &Meta::default(),
+            &HashSet::new(),
+            0,
+        );
+        assert!(
+            f.hits
+                .iter()
+                .any(|h| matches!(&h.action, HitAction::OpenUrl(u) if u == "https://x.test")),
+            "the link is a click target"
+        );
+    }
+
+    #[test]
     fn details_box_frame_stays_square_over_long_lines() {
         let long = "a word ".repeat(10);
         let deck = parse(&format!("◊details[{long}]{{\n{long}\n}}\n"));
@@ -860,7 +881,7 @@ mod tests {
 
     #[test]
     fn details_inside_art_toggles_under_its_branch() {
-        let deck = parse("```\n├─ branch\n│  ◊details[why]{\n│  because\n│  }\n```\n");
+        let deck = parse("◊figure{\n├─ branch\n│  ◊details[why]{\n│  because\n│  }\n}\n");
         let slide = &deck.slides[0];
         let closed = frame(
             slide,

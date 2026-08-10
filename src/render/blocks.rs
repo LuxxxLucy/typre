@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
-use crate::core::ir::{draws, guides, Align, ArtPart, Block, Inline, RenderOp, Style, Width};
+use crate::core::ir::{draws, ArtLine, ArtPart, Align, Block, Inline, RenderOp, Style, Width};
 use crate::layout::{natural_ppi, TermInfo};
 use crate::commands;
 use crate::render::inline::{disp_width, emit_inlines, flat_text, uppercase_inlines};
@@ -69,7 +69,7 @@ pub(crate) fn emit_block(
         Block::List { ordered, items } => {
             emit_list(*ordered, items, "", term, deck_dir, indent, tg, ops);
         }
-        Block::Code { src, lang } => emit_code(src, lang, term, indent, ops),
+        Block::Code { src, lang } => emit_code(src, lang.as_deref(), term, indent, ops),
         Block::Art { parts, caption } => {
             emit_art(parts, caption, term, deck_dir, indent, tg, ops)
         }
@@ -124,13 +124,21 @@ fn code_label_style() -> Style {
     }
 }
 
-// A fenced code block: the language as a label, then every line on the panel background,
-// padded to the column.
-fn emit_code(src: &str, lang: &str, term: &TermInfo, indent: usize, ops: &mut Vec<RenderOp>) {
+// A fenced code block: the language as a label when the fence names one, then every line on
+// the panel background, padded to the column.
+fn emit_code(
+    src: &str,
+    lang: Option<&str>,
+    term: &TermInfo,
+    indent: usize,
+    ops: &mut Vec<RenderOp>,
+) {
     let w = (term.cols as usize).saturating_sub(indent).max(1);
-    ops.push(indent_op(indent));
-    ops.push(RenderOp::Text(format!(" {lang} "), code_label_style()));
-    ops.push(RenderOp::LineBreak);
+    if let Some(lang) = lang {
+        ops.push(indent_op(indent));
+        ops.push(RenderOp::Text(format!(" {lang} "), code_label_style()));
+        ops.push(RenderOp::LineBreak);
+    }
     for line in src.lines() {
         ops.push(indent_op(indent));
         ops.push(RenderOp::Text(
@@ -141,13 +149,13 @@ fn emit_code(src: &str, lang: &str, term: &TermInfo, indent: usize, ops: &mut Ve
     }
 }
 
-// ASCII art two spaces in from the margin: literal lines, the blocks its ◊ commands parsed
-// to, and a caption under them if there is one. A nested block is rendered on its own, then
-// every line of it is prefixed with the guides of the line the command sat on, so a details
-// box under a `├─` branch stays under that branch.
+// A figure two spaces in from the margin: its lines, the blocks its ◊ commands parsed to, and
+// a caption under them if there is one. A nested block is rendered on its own, then every line
+// of it is prefixed with the guides of the line the command sat on, so a details box under a
+// `├─` branch stays under that branch.
 fn emit_art(
     parts: &[ArtPart],
-    caption: &str,
+    caption: &[Inline],
     term: &TermInfo,
     deck_dir: &Path,
     indent: usize,
@@ -159,51 +167,88 @@ fn emit_art(
     for part in parts {
         match part {
             ArtPart::Lines(lines) => {
-                for line in lines {
-                    emit_art_line(line, &pre, width, Style::default(), ops);
+                for l in lines {
+                    let rows = art_rows(l, width, term, deck_dir);
+                    let cont = continue_guides(&l.guide);
+                    prefix_rows(&pre, &l.guide, &cont, rows, ops);
                 }
             }
             ArtPart::Nested { guide, block } => {
                 let inner = term.with_cols(width.saturating_sub(cell_width(guide)));
                 let mut sub = Vec::new();
                 emit_block(block, &inner, deck_dir, 0, tg, &mut sub);
-                for line in split_lines(sub) {
-                    ops.push(RenderOp::Text(format!("{pre}{guide}"), Style::default()));
-                    ops.extend(line);
-                    ops.push(RenderOp::LineBreak);
-                }
+                prefix_rows(&pre, guide, guide, split_lines(sub), ops);
             }
         }
     }
     if !caption.is_empty() {
-        emit_art_line(caption, &pre, width, caption_style(), ops);
+        let line = ArtLine {
+            guide: String::new(),
+            inls: caption.to_vec(),
+        };
+        let rows = art_rows(&line, width, term, deck_dir);
+        prefix_rows(&pre, "", "", rows, ops);
     }
 }
 
+// The visual rows of one art line. Laid out unwrapped first: a line that fits is drawn as
+// written, and so is one that draws (a box side, an arrow), since reflowing it breaks the art.
+// Prose past the column is laid out again against what the guides leave.
+fn art_rows(
+    line: &ArtLine,
+    width: usize,
+    term: &TermInfo,
+    deck_dir: &Path,
+) -> Vec<Vec<RenderOp>> {
+    let style = Style::default();
+    let gw = cell_width(&line.guide);
+    let mut sub = Vec::new();
+    emit_inlines(
+        &line.inls,
+        style,
+        &term.with_cols(usize::from(u16::MAX)),
+        deck_dir,
+        0,
+        0,
+        &mut sub,
+    );
+    let rows = split_lines(sub);
+    let w = gw + rows.iter().map(|r| line_width(r)).max().unwrap_or(0);
+    if w <= width || flat_text(&line.inls).chars().any(draws) {
+        return rows;
+    }
+    let mut sub = Vec::new();
+    emit_inlines(
+        &line.inls,
+        style,
+        &term.with_cols(width.saturating_sub(gw).max(1)),
+        deck_dir,
+        0,
+        0,
+        &mut sub,
+    );
+    split_lines(sub)
+}
 
-// A line that fits is emitted byte-for-byte, so diagram spacing survives. An overrunning
-// line of prose wraps, and the continuation repeats the line's own indent and vertical
-// guides so prose written under a tree branch stays under it. An overrunning line that
-// draws (a box side, an arrow) runs into the margin instead: reflowing it breaks the art.
-fn emit_art_line(line: &str, pre: &str, width: usize, style: Style, ops: &mut Vec<RenderOp>) {
-    let push = |s: String, ops: &mut Vec<RenderOp>| {
-        ops.push(RenderOp::Text(format!("{pre}{s}"), style));
+// Draw rows at the figure's margin: `first` leads the first row, `rest` the ones it continues
+// onto. No rows at all is a blank art line, which still carries its guides.
+fn prefix_rows(
+    pre: &str,
+    first: &str,
+    rest: &str,
+    rows: Vec<Vec<RenderOp>>,
+    ops: &mut Vec<RenderOp>,
+) {
+    if rows.is_empty() {
+        ops.push(RenderOp::Text(format!("{pre}{first}"), Style::default()));
         ops.push(RenderOp::LineBreak);
-    };
-    let split = line
-        .char_indices()
-        .find(|(_, c)| !guides(*c))
-        .map_or(line.len(), |(i, _)| i);
-    let (guide, text) = line.split_at(split);
-    if cell_width(line) <= width || text.chars().any(draws) {
-        push(line.to_string(), ops);
         return;
     }
-    let cont = continue_guides(guide);
-    let body_w = width.saturating_sub(cell_width(guide)).max(1);
-    for (i, seg) in wrap_text(text, body_w).into_iter().enumerate() {
-        let lead = if i == 0 { guide } else { &cont };
-        push(format!("{lead}{seg}"), ops);
+    for (i, row) in rows.into_iter().enumerate() {
+        let lead = if i == 0 { first } else { rest };
+        ops.push(RenderOp::Text(format!("{pre}{lead}"), Style::default()));
+        ops.extend(row);
+        ops.push(RenderOp::LineBreak);
     }
 }
 

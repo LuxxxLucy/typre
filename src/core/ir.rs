@@ -41,15 +41,17 @@ pub enum Block {
         ordered: bool,
         items: Vec<Vec<Block>>,
     },
+    // A fenced code block. `lang` is the fence's info string, absent when it has none, and
+    // the label is drawn only when it is there. Nothing inside is evaluated.
     Code {
         src: String,
-        lang: String,
+        lang: Option<String>,
     },
-    // ASCII art: the literal lines of a language-less fence, and the ◊ commands nested
-    // between them. `◊figure` is the same block with a caption.
+    // The lines of a ◊figure, each holding its own place, and the ◊ commands nested between
+    // them. Inline markup inside a line is evaluated; only the reflow is suppressed.
     Art {
         parts: Vec<ArtPart>,
-        caption: String,
+        caption: Vec<Inline>,
     },
     BlockTypst {
         src: String,
@@ -89,8 +91,16 @@ pub(crate) fn guides(c: char) -> bool {
 // guides of the line it sat on, and every line it renders carries them.
 #[derive(Debug, Clone)]
 pub enum ArtPart {
-    Lines(Vec<String>),
+    Lines(Vec<ArtLine>),
     Nested { guide: String, block: Box<Block> },
+}
+
+// One art line: the indentation and guides it opens with, kept as written, and the inline
+// content after them.
+#[derive(Debug, Clone)]
+pub struct ArtLine {
+    pub guide: String,
+    pub inls: Vec<Inline>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

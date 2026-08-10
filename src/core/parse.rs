@@ -1,7 +1,9 @@
 use pulldown_cmark::{Alignment, CodeBlockKind, Event, HeadingLevel, Options, Parser, Tag, TagEnd};
 
 use crate::commands::{parse_command, Frag};
-use crate::core::ir::{guides, Align, ArtPart, Block, Deck, Inline, Meta, Slide, Style, Width};
+use crate::core::ir::{
+    guides, Align, ArtLine, ArtPart, Block, Deck, Inline, Meta, Slide, Style, Width,
+};
 
 pub fn parse(md: &str) -> Deck {
     let (md, frags) = extract_typst(md);
@@ -119,12 +121,9 @@ pub fn parse(md: &str) -> Deck {
                 if src.ends_with('\n') {
                     src.pop();
                 }
-                let block = match code_lang.take() {
-                    Some(lang) => Block::Code { src, lang },
-                    None => Block::Art {
-                        parts: art_parts(&src),
-                        caption: String::new(),
-                    },
+                let block = Block::Code {
+                    src,
+                    lang: code_lang.take(),
                 };
                 push_block(&mut block_stack, block);
             }
@@ -326,7 +325,7 @@ fn extract_typst(md: &str) -> (String, Vec<Frag>) {
 // lines of its body. Anything else stays literal.
 pub(crate) fn art_parts(src: &str) -> Vec<ArtPart> {
     let mut parts = Vec::new();
-    let mut lines: Vec<String> = Vec::new();
+    let mut lines: Vec<ArtLine> = Vec::new();
     let raw: Vec<&str> = src.lines().collect();
     let mut i = 0;
     while i < raw.len() {
@@ -342,7 +341,7 @@ pub(crate) fn art_parts(src: &str) -> Vec<ArtPart> {
                 i += used;
             }
             None => {
-                lines.push(raw[i].to_string());
+                lines.push(art_line(raw[i]));
                 i += 1;
             }
         }
@@ -351,6 +350,37 @@ pub(crate) fn art_parts(src: &str) -> Vec<ArtPart> {
         parts.push(ArtPart::Lines(lines));
     }
     parts
+}
+
+// One art line. What it opens with, indentation and guides, is kept as written; the rest goes
+// through the ordinary inline parse, so a link, emphasis or a ◊ fragment works as anywhere
+// else. Only what markdown would do to the line as a whole, reflow it into a paragraph, is
+// left out.
+fn art_line(line: &str) -> ArtLine {
+    let split = line
+        .char_indices()
+        .find(|(_, c)| !guides(*c))
+        .map_or(line.len(), |(i, _)| i);
+    let (guide, text) = line.split_at(split);
+    ArtLine {
+        guide: guide.to_string(),
+        inls: art_inlines(text),
+    }
+}
+
+// The inline content of one line of source. A line that markdown reads as a block of its own,
+// a list item or a heading say, keeps its characters instead: inside a figure those are art.
+pub(crate) fn art_inlines(text: &str) -> Vec<Inline> {
+    if text.is_empty() {
+        return Vec::new();
+    }
+    match parse(text).slides.pop() {
+        Some(mut slide) => match slide.blocks.pop() {
+            Some(Block::Paragraph(inls)) if slide.blocks.is_empty() => inls,
+            _ => vec![Inline::Text(text.to_string(), Style::default())],
+        },
+        None => vec![Inline::Text(text.to_string(), Style::default())],
+    }
 }
 
 // A ◊ command opening on the first of `raw`, preceded on that line by guides only: its
@@ -650,20 +680,40 @@ mod tests {
         match &deck.slides[0].blocks[0] {
             Block::Code { src, lang } => {
                 assert_eq!(src, "fn main() {}");
-                assert_eq!(lang, "rust");
+                assert_eq!(lang.as_deref(), Some("rust"));
             }
             other => panic!("expected code, got {other:?}"),
         }
     }
 
     #[test]
-    fn fence_without_language_is_art() {
-        let deck = parse("```\n┌───┐\n│ A │\n└───┘\n```\n");
+    fn fence_without_language_is_code_without_a_label() {
+        let deck = parse("```\n◊details[not a command here]{x}\n```\n");
+        match &deck.slides[0].blocks[0] {
+            Block::Code { src, lang } => {
+                assert!(lang.is_none());
+                assert_eq!(src, "◊details[not a command here]{x}", "a fence evaluates nothing");
+            }
+            other => panic!("expected code, got {other:?}"),
+        }
+    }
+
+    // The source text of an art line: its guides, then its inline content flattened.
+    fn art_text(lines: &[ArtLine]) -> Vec<String> {
+        lines
+            .iter()
+            .map(|l| format!("{}{}", l.guide, crate::render::inline::flat_text(&l.inls)))
+            .collect()
+    }
+
+    #[test]
+    fn figure_without_a_caption_is_art() {
+        let deck = parse("◊figure{\n┌───┐\n│ A │\n└───┘\n}\n");
         match &deck.slides[0].blocks[0] {
             Block::Art { parts, caption } => {
                 assert!(caption.is_empty());
                 match &parts[..] {
-                    [ArtPart::Lines(l)] => assert_eq!(l, &["┌───┐", "│ A │", "└───┘"]),
+                    [ArtPart::Lines(l)] => assert_eq!(art_text(l), ["┌───┐", "│ A │", "└───┘"]),
                     other => panic!("expected one run of lines, got {other:?}"),
                 }
             }
@@ -672,17 +722,53 @@ mod tests {
     }
 
     #[test]
+    fn an_art_line_keeps_its_guides_and_evaluates_its_markup() {
+        let deck = parse("◊figure{\n│  see [docs](https://x.test) and **bold**\n}\n");
+        let parts = match &deck.slides[0].blocks[0] {
+            Block::Art { parts, .. } => parts,
+            other => panic!("expected art, got {other:?}"),
+        };
+        let line = match &parts[..] {
+            [ArtPart::Lines(l)] => &l[0],
+            other => panic!("expected one run of lines, got {other:?}"),
+        };
+        assert_eq!(line.guide, "│  ", "the guides are kept as written");
+        assert!(
+            line.inls.iter().any(|i| matches!(i, Inline::Link { url, .. } if url == "https://x.test")),
+            "the link is a link: {:?}",
+            line.inls
+        );
+        assert!(
+            line.inls.iter().any(|i| matches!(i, Inline::Text(t, s) if t == "bold" && s.bold)),
+            "the emphasis applies: {:?}",
+            line.inls
+        );
+    }
+
+    #[test]
+    fn a_block_construct_in_art_stays_literal() {
+        let deck = parse("◊figure{\n│  - not a list item\n}\n");
+        match &deck.slides[0].blocks[0] {
+            Block::Art { parts, .. } => match &parts[..] {
+                [ArtPart::Lines(l)] => assert_eq!(art_text(l), ["│  - not a list item"]),
+                other => panic!("expected one run of lines, got {other:?}"),
+            },
+            other => panic!("expected art, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn art_hosts_a_nested_command() {
-        let deck = parse("```\n├─ branch\n│  ◊details[why]{\n│  because\n│  }\n└─ end\n```\n");
+        let deck = parse("◊figure{\n├─ branch\n│  ◊details[why]{\n│  because\n│  }\n└─ end\n}\n");
         let parts = match &deck.slides[0].blocks[0] {
             Block::Art { parts, .. } => parts,
             other => panic!("expected art, got {other:?}"),
         };
         match &parts[..] {
             [ArtPart::Lines(a), ArtPart::Nested { guide, block }, ArtPart::Lines(b)] => {
-                assert_eq!(a, &["├─ branch"]);
+                assert_eq!(art_text(a), ["├─ branch"]);
                 assert_eq!(guide, "│  ");
-                assert_eq!(b, &["└─ end"]);
+                assert_eq!(art_text(b), ["└─ end"]);
                 match &**block {
                     Block::Details { summary, body } => {
                         assert_eq!(summary, "why");
@@ -749,9 +835,9 @@ mod tests {
         let deck = parse("◊figure[My caption]{\nart\n}\n");
         match &deck.slides[0].blocks[0] {
             Block::Art { parts, caption } => {
-                assert_eq!(caption, "My caption");
+                assert_eq!(crate::render::inline::flat_text(caption), "My caption");
                 match &parts[..] {
-                    [ArtPart::Lines(l)] => assert_eq!(l, &["art"]),
+                    [ArtPart::Lines(l)] => assert_eq!(art_text(l), ["art"]),
                     other => panic!("expected one run of lines, got {other:?}"),
                 }
             }
