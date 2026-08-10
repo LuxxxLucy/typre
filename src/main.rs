@@ -739,6 +739,7 @@ fn draw(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::render::blocks::{line_width, split_lines};
     use crate::core::parse::parse;
 
     fn term() -> TermInfo {
@@ -828,6 +829,33 @@ mod tests {
         assert_eq!(command_for(KeyCode::Char('c'), true), Command::Quit);
         assert_eq!(command_for(KeyCode::Esc, false), Command::Cancel);
         assert_eq!(command_for(KeyCode::Char('?'), false), Command::ToggleHelp);
+    }
+
+    #[test]
+    fn details_box_frame_stays_square_over_long_lines() {
+        let long = "a word ".repeat(10);
+        let deck = parse(&format!("◊details[{long}]{{\n{long}\n}}\n"));
+        let mut open = HashSet::new();
+        open.insert(0);
+        let f = frame(
+            &deck.slides[0],
+            &term(),
+            Path::new("."),
+            0,
+            1,
+            &Meta::default(),
+            &open,
+            0,
+        );
+        let rows = split_lines(f.ops);
+        let find = |c: char| rows.iter().position(|l| ops_text(l).contains(c));
+        let (top, bottom) = (find('┌').unwrap(), find('└').unwrap());
+        let widths: Vec<usize> = rows[top..=bottom].iter().map(|l| line_width(l)).collect();
+        assert!(bottom > top + 1, "the body wrapped to several rows: {widths:?}");
+        assert!(widths[0] <= term().cols as usize, "the box fits the terminal");
+        for w in &widths {
+            assert_eq!(*w, widths[0], "every row is the same width: {widths:?}");
+        }
     }
 
     #[test]
