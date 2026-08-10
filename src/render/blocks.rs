@@ -1,13 +1,13 @@
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
-use crate::core::ir::{Align, ArtPart, Block, Inline, RenderOp, Style, Width, GUIDE};
+use crate::core::ir::{draws, guides, Align, ArtPart, Block, Inline, RenderOp, Style, Width};
 use crate::layout::{natural_ppi, TermInfo};
 use crate::commands;
 use crate::render::inline::{disp_width, emit_inlines, flat_text, uppercase_inlines};
 use crate::render::paint::{
-    cell_width, char_cells, code_style, heading_style, image_cells, indent_op, pad, place_image,
-    quote_style,
+    caption_style, cell_width, char_cells, code_style, heading_style, image_cells, indent_op, pad,
+    place_image, quote_style,
 };
 
 // Details boxes are numbered as they are emitted, at any nesting depth, so a box inside art
@@ -85,10 +85,7 @@ pub(crate) fn emit_block(
                     ops.push(indent_op(indent));
                     ops.push(RenderOp::Text(
                         pad(alt, content_w, Align::Center),
-                        Style {
-                            italic: true,
-                            ..Style::default()
-                        },
+                        caption_style(),
                     ));
                     ops.push(RenderOp::LineBreak);
                 }
@@ -179,11 +176,7 @@ fn emit_art(
         }
     }
     if !caption.is_empty() {
-        let style = Style {
-            italic: true,
-            ..Style::default()
-        };
-        emit_art_line(caption, &pre, width, style, ops);
+        emit_art_line(caption, &pre, width, caption_style(), ops);
     }
 }
 
@@ -198,7 +191,7 @@ fn emit_art_line(line: &str, pre: &str, width: usize, style: Style, ops: &mut Ve
     };
     let split = line
         .char_indices()
-        .find(|(_, c)| !GUIDE.contains(*c))
+        .find(|(_, c)| !guides(*c))
         .map_or(line.len(), |(i, _)| i);
     let (guide, text) = line.split_at(split);
     if cell_width(line) <= width || text.chars().any(draws) {
@@ -214,12 +207,6 @@ fn emit_art_line(line: &str, pre: &str, width: usize, style: Style, ops: &mut Ve
         let lead = if i == 0 { guide } else { &cont };
         push(format!("{lead}{seg}"), ops);
     }
-}
-
-// Arrows, box drawing, block elements, geometric shapes: past the leading guides, any of
-// these means the line is part of a drawing.
-fn draws(c: char) -> bool {
-    matches!(c, '\u{2190}'..='\u{21ff}' | '\u{2500}'..='\u{25ff}')
 }
 
 // A single-column box: content wrapped into `vlines` framed at width `inner`, with

@@ -1,7 +1,7 @@
 use pulldown_cmark::{Alignment, CodeBlockKind, Event, HeadingLevel, Options, Parser, Tag, TagEnd};
 
 use crate::commands::{parse_command, Frag};
-use crate::core::ir::{Align, ArtPart, Block, Deck, Inline, Meta, Slide, Style, Width, GUIDE};
+use crate::core::ir::{guides, Align, ArtPart, Block, Deck, Inline, Meta, Slide, Style, Width};
 
 pub fn parse(md: &str) -> Deck {
     let (md, frags) = extract_typst(md);
@@ -360,7 +360,7 @@ fn command_at(raw: &[&str]) -> Option<(String, Block, usize)> {
     let first = raw[0];
     let start = first.find('◊')?;
     let guide = &first[..start];
-    if !guide.chars().all(|c| GUIDE.contains(c)) {
+    if !guide.chars().all(guides) {
         return None;
     }
     let dedented: Vec<&str> = raw
@@ -368,14 +368,13 @@ fn command_at(raw: &[&str]) -> Option<(String, Block, usize)> {
         .map(|l| l.strip_prefix(guide).unwrap_or(l))
         .collect();
     let body = dedented.join("\n");
-    let after = &body[body.find('◊')? + '◊'.len_utf8()..];
-    let (frag, consumed) = parse_command(after)?;
+    let open = start - guide.len() + '◊'.len_utf8();
+    let (frag, consumed) = parse_command(&body[open..])?;
     let block = match frag {
         Frag::Block(b) => b,
         Frag::Inline { src, width } => Block::BlockTypst { src, width },
     };
-    let end = body.len() - after.len() + consumed;
-    let used = body[..end].matches('\n').count() + 1;
+    let used = body[..open + consumed].matches('\n').count() + 1;
     Some((guide.to_string(), block, used))
 }
 

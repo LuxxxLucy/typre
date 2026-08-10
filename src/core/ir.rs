@@ -74,9 +74,15 @@ pub enum Block {
     },
 }
 
-// The characters that may lead an art line before its content: indentation and the vertical
-// guides of a hand-drawn tree.
-pub(crate) const GUIDE: &str = " \t│├└┌┬┴┼─";
+// Part of a drawing: arrows, box drawing, block elements, geometric shapes.
+pub(crate) fn draws(c: char) -> bool {
+    matches!(c, '\u{2190}'..='\u{21ff}' | '\u{2500}'..='\u{25ff}')
+}
+
+// May lead an art line before its content: indentation, or the guides of a hand-drawn tree.
+pub(crate) fn guides(c: char) -> bool {
+    c.is_whitespace() || draws(c)
+}
 
 // One stretch of an art block. A nested command keeps the leading whitespace and vertical
 // guides of the line it sat on, and every line it renders carries them.

@@ -120,6 +120,14 @@ pub(crate) fn dim_style() -> Style {
     }
 }
 
+// An image alt line, an art caption: the text under a figure.
+pub(crate) fn caption_style() -> Style {
+    Style {
+        italic: true,
+        ..Style::default()
+    }
+}
+
 pub(crate) fn code_style() -> Style {
     Style {
         code: true,
