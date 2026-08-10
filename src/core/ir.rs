@@ -84,6 +84,7 @@ pub(crate) fn guides(c: char) -> bool {
     c.is_whitespace() || draws(c)
 }
 
+
 // One stretch of an art block. A nested command keeps the leading whitespace and vertical
 // guides of the line it sat on, and every line it renders carries them.
 #[derive(Debug, Clone)]

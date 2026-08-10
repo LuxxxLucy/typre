@@ -3,7 +3,9 @@ use std::path::Path;
 use crate::core::ir::{Inline, RenderOp, Style};
 use crate::commands::typst;
 use crate::layout::{natural_ppi, TermInfo};
-use crate::render::paint::{cell_width, char_cells, code_style, image_dims, indent_op, Hit, HitAction};
+use crate::render::paint::{
+    break_units, cell_width, code_style, image_dims, indent_op, Hit, HitAction,
+};
 
 // Lay inline content into a column of `term.cols - hang`, wrapping on spaces.
 // The first line starts at `lead`; wrapped lines align at the hanging indent
@@ -124,25 +126,15 @@ fn inline_tokens(inls: &[Inline], base: Style, term: &TermInfo, deck_dir: &Path)
     toks
 }
 
-// Split on spaces; each wide (CJK) char is its own token so runs break between characters.
+// One Tok per break unit, so the inline flow and the plain-text wrapper agree on where a
+// line may break.
 fn push_words(toks: &mut Vec<Tok>, text: &str, style: Style) {
-    let mut word = String::new();
-    for c in text.chars() {
-        if c == ' ' || char_cells(c) >= 2 {
-            if !word.is_empty() {
-                toks.push(Tok::Text(std::mem::take(&mut word), style));
-            }
-            if c == ' ' {
-                toks.push(Tok::Space(style));
-            } else {
-                toks.push(Tok::Text(c.to_string(), style));
-            }
+    for (unit, _) in break_units(text) {
+        if unit == " " {
+            toks.push(Tok::Space(style));
         } else {
-            word.push(c);
+            toks.push(Tok::Text(unit, style));
         }
-    }
-    if !word.is_empty() {
-        toks.push(Tok::Text(word, style));
     }
 }
 

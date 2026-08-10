@@ -1,11 +1,13 @@
 use std::collections::HashSet;
 use std::path::Path;
 
-use crate::core::ir::{Block, Inline, RenderOp, Slide, Style, TocEntry};
+use crate::core::ir::{Block, Inline, RenderOp, Slide, TocEntry};
 use crate::layout::{layout, TermInfo};
 use crate::render::blocks::{emit_block, emit_box, line_width, split_lines, BoxDeco, Toggles};
 use crate::render::inline::{emit_inlines, hits as click_hits, uppercase_inlines};
-use crate::render::paint::{cell_width, current_row, dim_style, heading_style, hrule, indent_op, Hit, HitAction};
+use crate::render::paint::{
+    cell_width, current_row, dim_style, heading_style, indent_op, Hit, HitAction,
+};
 
 // Title slide: the heading sits in a bordered box at the normal slide margin and
 // width. The opening title slide lists the deck's sections (slide.toc) as jump
@@ -42,14 +44,7 @@ pub(crate) fn render(
 
     let mut ops = Vec::new();
     ops.push(RenderOp::LineBreak); // top padding
-    let deco = BoxDeco {
-        top: hrule('┌', inner + 2, '┐'),
-        bottom: hrule('└', inner + 2, '┘'),
-        left: "│ ".to_string(),
-        right: " │".to_string(),
-        frame: Style::default(),
-        content_bg: Style::default(),
-    };
+    let deco = BoxDeco::bordered(inner);
     emit_box(vlines, inner, margin, &deco, &mut ops);
 
     let mut hits = emit_toc(&slide.toc, content_w, margin, &mut ops);

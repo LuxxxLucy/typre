@@ -142,6 +142,70 @@ pub(crate) fn quote_style() -> Style {
     }
 }
 
+// A line that fits `w`, or the lines it wraps to.
+pub(crate) fn fit(line: &str, w: usize) -> Vec<String> {
+    if cell_width(line) <= w {
+        vec![line.to_string()]
+    } else {
+        wrap_text(line, w)
+    }
+}
+
+// Greedy wrap to `w` display columns. A line may break at a space or between wide (CJK)
+// characters, matching the paragraph flow; a narrow-script word wider than the column is
+// split mid-word, since nothing else fits.
+pub(crate) fn wrap_text(s: &str, w: usize) -> Vec<String> {
+    let w = w.max(1);
+    let mut lines = Vec::new();
+    let mut cur = String::new();
+    let mut col = 0usize;
+    for (unit, uw) in break_units(s) {
+        if col + uw > w && col > 0 {
+            lines.push(std::mem::take(&mut cur));
+            col = 0;
+            if unit == " " {
+                continue;
+            }
+        }
+        for c in unit.chars() {
+            let cw = char_cells(c).max(1);
+            if col + cw > w && col > 0 {
+                lines.push(std::mem::take(&mut cur));
+                col = 0;
+            }
+            cur.push(c);
+            col += cw;
+        }
+    }
+    if !cur.is_empty() || lines.is_empty() {
+        lines.push(cur);
+    }
+    lines
+}
+
+// A space, one wide character, or one run of narrow characters: the units a line may
+// break between.
+pub(crate) fn break_units(s: &str) -> Vec<(String, usize)> {
+    let mut out = Vec::new();
+    let mut word = String::new();
+    let flush = |word: &mut String, out: &mut Vec<(String, usize)>| {
+        if !word.is_empty() {
+            let w = cell_width(word);
+            out.push((std::mem::take(word), w));
+        }
+    };
+    for c in s.chars() {
+        if c == ' ' || char_cells(c) >= 2 {
+            flush(&mut word, &mut out);
+            out.push((c.to_string(), char_cells(c).max(1)));
+        } else {
+            word.push(c);
+        }
+    }
+    flush(&mut word, &mut out);
+    out
+}
+
 // A horizontal box rule: a left corner, `w` dashes, a right corner.
 pub(crate) fn hrule(left: char, w: usize, right: char) -> String {
     format!("{left}{}{right}", "─".repeat(w))

@@ -6,8 +6,8 @@ use crate::layout::{natural_ppi, TermInfo};
 use crate::commands;
 use crate::render::inline::{disp_width, emit_inlines, flat_text, uppercase_inlines};
 use crate::render::paint::{
-    caption_style, cell_width, char_cells, code_style, heading_style, image_cells, indent_op, pad,
-    place_image, quote_style,
+    caption_style, cell_width, code_style, heading_style, hrule, image_cells, indent_op, pad,
+    place_image, quote_style, wrap_text,
 };
 
 // Details boxes are numbered as they are emitted, at any nesting depth, so a box inside art
@@ -180,6 +180,7 @@ fn emit_art(
     }
 }
 
+
 // A line that fits is emitted byte-for-byte, so diagram spacing survives. An overrunning
 // line of prose wraps, and the continuation repeats the line's own indent and vertical
 // guides so prose written under a tree branch stays under it. An overrunning line that
@@ -198,15 +199,21 @@ fn emit_art_line(line: &str, pre: &str, width: usize, style: Style, ops: &mut Ve
         push(line.to_string(), ops);
         return;
     }
-    let cont: String = guide
-        .chars()
-        .map(|c| if "│├┼┬┌".contains(c) { '│' } else { ' ' })
-        .collect();
+    let cont = continue_guides(guide);
     let body_w = width.saturating_sub(cell_width(guide)).max(1);
     for (i, seg) in wrap_text(text, body_w).into_iter().enumerate() {
         let lead = if i == 0 { guide } else { &cont };
         push(format!("{lead}{seg}"), ops);
     }
+}
+
+// The prefix for the rows a wrapped art line continues onto. A guide that runs downwards
+// continues as `│`; a branch or a horizontal run has already been drawn, so it goes blank.
+fn continue_guides(guide: &str) -> String {
+    guide
+        .chars()
+        .map(|c| if matches!(c, '│' | '├' | '┌' | '┬' | '┼') { '│' } else { ' ' })
+        .collect()
 }
 
 // A single-column box: content wrapped into `vlines` framed at width `inner`, with
@@ -219,6 +226,32 @@ pub(crate) struct BoxDeco {
     pub right: String,
     pub frame: Style,
     pub content_bg: Style,
+}
+
+impl BoxDeco {
+    // A single-line frame with one space of inset each side.
+    pub(crate) fn bordered(inner: usize) -> BoxDeco {
+        BoxDeco {
+            top: hrule('┌', inner + 2, '┐'),
+            bottom: hrule('└', inner + 2, '┘'),
+            left: "│ ".to_string(),
+            right: " │".to_string(),
+            frame: Style::default(),
+            content_bg: Style::default(),
+        }
+    }
+
+    // No frame, `style` as the background of the whole box, one space of inset each side.
+    pub(crate) fn shaded(inner: usize, style: Style) -> BoxDeco {
+        BoxDeco {
+            top: " ".repeat(inner + 2),
+            bottom: " ".repeat(inner + 2),
+            left: " ".to_string(),
+            right: " ".to_string(),
+            frame: style,
+            content_bg: style,
+        }
+    }
 }
 
 pub(crate) fn emit_box(
@@ -266,15 +299,7 @@ fn emit_quote(
     for b in inner {
         emit_block(b, &inner_term, deck_dir, 0, tg, &mut sub);
     }
-    let q = quote_style();
-    let deco = BoxDeco {
-        top: " ".repeat(text_w + 2),
-        bottom: " ".repeat(text_w + 2),
-        left: " ".to_string(),
-        right: " ".to_string(),
-        frame: q,
-        content_bg: q,
-    };
+    let deco = BoxDeco::shaded(text_w, quote_style());
     emit_box(split_lines(sub), text_w, indent, &deco, ops);
 }
 
@@ -537,57 +562,3 @@ fn emit_table(
     push_line(border('└', '┴', '┘'), ops);
 }
 
-// Greedy wrap to `w` display columns. A line may break at a space or between wide (CJK)
-// characters, matching the paragraph flow; a narrow-script word wider than the column is
-// split mid-word, since nothing else fits.
-pub(crate) fn wrap_text(s: &str, w: usize) -> Vec<String> {
-    let w = w.max(1);
-    let mut lines = Vec::new();
-    let mut cur = String::new();
-    let mut col = 0usize;
-    for (unit, uw) in break_units(s) {
-        if col + uw > w && col > 0 {
-            lines.push(std::mem::take(&mut cur));
-            col = 0;
-            if unit == " " {
-                continue;
-            }
-        }
-        for c in unit.chars() {
-            let cw = char_cells(c).max(1);
-            if col + cw > w && col > 0 {
-                lines.push(std::mem::take(&mut cur));
-                col = 0;
-            }
-            cur.push(c);
-            col += cw;
-        }
-    }
-    if !cur.is_empty() || lines.is_empty() {
-        lines.push(cur);
-    }
-    lines
-}
-
-// A space, one wide character, or one run of narrow characters: the units a line may
-// break between.
-fn break_units(s: &str) -> Vec<(String, usize)> {
-    let mut out = Vec::new();
-    let mut word = String::new();
-    let flush = |word: &mut String, out: &mut Vec<(String, usize)>| {
-        if !word.is_empty() {
-            let w = cell_width(word);
-            out.push((std::mem::take(word), w));
-        }
-    };
-    for c in s.chars() {
-        if c == ' ' || char_cells(c) >= 2 {
-            flush(&mut word, &mut out);
-            out.push((c.to_string(), char_cells(c).max(1)));
-        } else {
-            word.push(c);
-        }
-    }
-    flush(&mut word, &mut out);
-    out
-}
