@@ -130,9 +130,13 @@ pub enum RenderOp {
         cols: u16,
         rows: u16,
     },
+    // One placeholder line of a virtual placement `rows` tall: `row` selects the
+    // slice. A table cell emits one op per line so borders stay in the text grid.
     InlineImage {
         png_path: PathBuf,
         cols: u16,
+        rows: u16,
+        row: u16,
     },
     Link {
         label: String,

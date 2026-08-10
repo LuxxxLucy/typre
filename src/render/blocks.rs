@@ -1,10 +1,12 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::core::ir::{Align, Block, Inline, RenderOp, Style, Width};
-use crate::layout::TermInfo;
+use crate::layout::{natural_ppi, TermInfo};
 use crate::commands;
 use crate::render::inline::{disp_width, emit_inlines, flat_text, uppercase_inlines};
-use crate::render::paint::{cell_width, code_style, heading_style, indent_op, pad, place_image, quote_style};
+use crate::render::paint::{
+    cell_width, code_style, heading_style, image_cells, indent_op, pad, place_image, quote_style,
+};
 
 pub(crate) fn emit_block(
     block: &Block,
@@ -99,7 +101,7 @@ pub(crate) fn emit_block(
             ops.push(RenderOp::LineBreak);
         }
         Block::Table { aligns, head, rows } => {
-            emit_table(aligns, head, rows, term, indent, ops);
+            emit_table(aligns, head, rows, term, deck_dir, indent, ops);
         }
         Block::Quote(inner) => emit_quote(inner, term, deck_dir, indent, ops),
         Block::Tree(nodes) => commands::tree::render(nodes, indent, ops),
@@ -263,11 +265,43 @@ fn emit_list(
     }
 }
 
+// A table cell: the text it wraps, and the figure a `◊typst` or `◊width` command in
+// it renders to. The figure takes the top lines of the cell, the text wraps under it.
+#[derive(Default)]
+struct Cell {
+    text: String,
+    fig: Option<Fig>,
+}
+
+struct Fig {
+    png: PathBuf,
+    width: Width,
+    cols: u16,
+    rows: u16,
+}
+
+// Render the first typst fragment in the cell and size it against `avail` columns.
+fn cell_fig(inls: &[Inline], term: &TermInfo, deck_dir: &Path, avail: usize) -> Option<Fig> {
+    let (src, width) = inls.iter().find_map(|i| match i {
+        Inline::InlineTypst { src, width, .. } => Some((src, *width)),
+        _ => None,
+    })?;
+    let png = commands::typst::render_fragment(src, deck_dir, natural_ppi(term), true).ok()?;
+    let (cols, rows) = image_cells(&png, &term.with_cols(avail), 0, width);
+    Some(Fig {
+        png,
+        width,
+        cols,
+        rows,
+    })
+}
+
 fn emit_table(
     aligns: &[Align],
     head: &[Vec<Inline>],
     rows: &[Vec<Vec<Inline>>],
     term: &TermInfo,
+    deck_dir: &Path,
     indent: usize,
     ops: &mut Vec<RenderOp>,
 ) {
@@ -276,13 +310,31 @@ fn emit_table(
         return;
     }
     let align_of = |c: usize| aligns.get(c).copied().unwrap_or(Align::Left);
-    let cell_text = |inls: Option<&Vec<Inline>>| inls.map(|i| flat_text(i)).unwrap_or_default();
+    let content_w = (term.cols as usize).saturating_sub(indent).max(1);
+    let build = |inls: Option<&Vec<Inline>>| -> Cell {
+        let inls = match inls {
+            Some(i) => i,
+            None => return Cell::default(),
+        };
+        Cell {
+            text: flat_text(inls),
+            fig: cell_fig(inls, term, deck_dir, content_w),
+        }
+    };
+    let mut head_cells: Vec<Cell> = (0..ncol).map(|c| build(head.get(c))).collect();
+    let mut body_cells: Vec<Vec<Cell>> = rows
+        .iter()
+        .map(|row| (0..ncol).map(|c| build(row.get(c))).collect())
+        .collect();
 
+    // A column is as wide as its widest text, or its widest figure.
     let mut widths = vec![0usize; ncol];
     for c in 0..ncol {
         let mut w = disp_width(head.get(c).map(Vec::as_slice).unwrap_or(&[]));
-        for row in rows {
+        w = w.max(head_cells[c].fig.as_ref().map_or(0, |f| f.cols as usize));
+        for (r, row) in rows.iter().enumerate() {
             w = w.max(disp_width(row.get(c).map(Vec::as_slice).unwrap_or(&[])));
+            w = w.max(body_cells[r][c].fig.as_ref().map_or(0, |f| f.cols as usize));
         }
         widths[c] = w;
     }
@@ -301,6 +353,18 @@ fn emit_table(
         widths[widest] -= 1;
     }
 
+    // Re-fit each figure to the column it ended up with.
+    for c in 0..ncol {
+        for cell in std::iter::once(&mut head_cells[c]).chain(body_cells.iter_mut().map(|r| &mut r[c]))
+        {
+            if let Some(f) = cell.fig.as_mut() {
+                let (cols, rows) = image_cells(&f.png, &term.with_cols(widths[c]), 0, f.width);
+                f.cols = cols;
+                f.rows = rows;
+            }
+        }
+    }
+
     let pre = " ".repeat(indent);
     let border = |l: char, m: char, r: char| {
         let mut s = String::new();
@@ -315,30 +379,63 @@ fn emit_table(
         ops.push(RenderOp::Text(format!("{pre}{s}"), Style::default()));
         ops.push(RenderOp::LineBreak);
     };
-    let emit_row = |cells: &[String], style: Style, ops: &mut Vec<RenderOp>| {
+    let emit_row = |cells: &[Cell], style: Style, ops: &mut Vec<RenderOp>| {
         let wrapped: Vec<Vec<String>> = (0..ncol)
-            .map(|c| wrap_cell(cells.get(c).map(String::as_str).unwrap_or(""), widths[c]))
+            .map(|c| wrap_cell(&cells[c].text, widths[c]))
             .collect();
-        let height = wrapped.iter().map(Vec::len).max().unwrap_or(1);
+        let fig_rows = |c: usize| cells[c].fig.as_ref().map_or(0, |f| f.rows as usize);
+        let height = (0..ncol)
+            .map(|c| fig_rows(c) + wrapped[c].len())
+            .max()
+            .unwrap_or(1)
+            .max(1);
         for r in 0..height {
             ops.push(RenderOp::Text(pre.clone(), Style::default()));
             for c in 0..ncol {
                 ops.push(RenderOp::Text("│ ".to_string(), Style::default()));
-                let seg = wrapped[c].get(r).map(String::as_str).unwrap_or("");
-                ops.push(RenderOp::Text(format!("{} ", pad(seg, widths[c], align_of(c))), style));
+                if r < fig_rows(c) {
+                    // The figure line carries no text, so pad around it by hand to
+                    // keep the right border in its column.
+                    let f = cells[c].fig.as_ref().unwrap();
+                    let slack = widths[c].saturating_sub(f.cols as usize);
+                    let left = slack / 2;
+                    ops.push(RenderOp::Text(" ".repeat(left), style));
+                    ops.push(RenderOp::InlineImage {
+                        png_path: f.png.clone(),
+                        cols: f.cols,
+                        rows: f.rows,
+                        row: r as u16,
+                    });
+                    ops.push(RenderOp::Text(" ".repeat(slack - left + 1), style));
+                } else {
+                    let seg = wrapped[c].get(r - fig_rows(c)).map(String::as_str).unwrap_or("");
+                    ops.push(RenderOp::Text(format!("{} ", pad(seg, widths[c], align_of(c))), style));
+                }
             }
             ops.push(RenderOp::Text("│".to_string(), Style::default()));
             ops.push(RenderOp::LineBreak);
         }
     };
 
+    // A blank line between body rows, so entries read apart without a rule.
+    let gap = {
+        let mut s = String::new();
+        for w in &widths {
+            s.push_str("│ ");
+            s.push_str(&" ".repeat(w + 1));
+        }
+        s.push('│');
+        s
+    };
+
     push_line(border('┌', '┬', '┐'), ops);
-    let head_cells: Vec<String> = (0..ncol).map(|c| cell_text(head.get(c))).collect();
     emit_row(&head_cells, heading_style(), ops);
     push_line(border('├', '┼', '┤'), ops);
-    for row in rows {
-        let cells: Vec<String> = (0..ncol).map(|c| cell_text(row.get(c))).collect();
-        emit_row(&cells, Style::default(), ops);
+    for (i, row) in body_cells.iter().enumerate() {
+        if i > 0 {
+            push_line(gap.clone(), ops);
+        }
+        emit_row(row, Style::default(), ops);
     }
     push_line(border('└', '┴', '┘'), ops);
 }

@@ -49,6 +49,8 @@ pub(crate) fn emit_inlines(
             Tok::Img { png, cols } => ops.push(RenderOp::InlineImage {
                 png_path: png,
                 cols,
+                rows: 1,
+                row: 0,
             }),
             Tok::Link { label, url, style } => ops.push(RenderOp::Link { label, url, style }),
             Tok::Break => {}
