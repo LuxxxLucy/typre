@@ -200,34 +200,19 @@ fn art_rows(
     term: &TermInfo,
     deck_dir: &Path,
 ) -> Vec<Vec<RenderOp>> {
-    let style = Style::default();
+    let lay = |cols: usize| {
+        let mut sub = Vec::new();
+        let inner = term.with_cols(cols);
+        emit_inlines(&line.inls, Style::default(), &inner, deck_dir, 0, 0, &mut sub);
+        split_lines(sub)
+    };
     let gw = cell_width(&line.guide);
-    let mut sub = Vec::new();
-    emit_inlines(
-        &line.inls,
-        style,
-        &term.with_cols(usize::from(u16::MAX)),
-        deck_dir,
-        0,
-        0,
-        &mut sub,
-    );
-    let rows = split_lines(sub);
+    let rows = lay(usize::from(u16::MAX));
     let w = gw + rows.iter().map(|r| line_width(r)).max().unwrap_or(0);
     if w <= width || flat_text(&line.inls).chars().any(draws) {
         return rows;
     }
-    let mut sub = Vec::new();
-    emit_inlines(
-        &line.inls,
-        style,
-        &term.with_cols(width.saturating_sub(gw).max(1)),
-        deck_dir,
-        0,
-        0,
-        &mut sub,
-    );
-    split_lines(sub)
+    lay(width.saturating_sub(gw).max(1))
 }
 
 // Draw rows at the figure's margin: `first` leads the first row, `rest` the ones it continues
