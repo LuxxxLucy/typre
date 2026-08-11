@@ -266,7 +266,7 @@ fn help_overlay(term: &TermInfo) -> Vec<RenderOp> {
         "g  /  G       first / last slide",
         "<n> G         go to slide n",
         "wheel         scroll a long slide",
-        "click ⊕       expand a details box",
+        "click +       expand a details box",
         "click link    open in browser",
         "Shift+drag    select text",
         "?             toggle this help",
@@ -991,7 +991,7 @@ mod tests {
         open.insert(0);
         let shown = frame(slide, &term(), Path::new("."), 0, 1, &Meta::default(), &open, 0);
         let txt = ops_text(&shown.ops);
-        assert!(txt.contains("│  │ ⊖ why"), "the box keeps the branch guide: {txt:?}");
+        assert!(txt.contains("│  │ - why"), "the box keeps the branch guide: {txt:?}");
         assert!(txt.contains("│  │   because"), "so does its body: {txt:?}");
     }
 
@@ -1016,13 +1016,13 @@ mod tests {
             .count();
         assert_eq!(toggles, 1, "summary is a click target");
         let txt = ops_text(&closed.ops);
-        assert!(txt.contains("⊕ Summary") && !txt.contains("body line"), "closed hides body");
+        assert!(txt.contains("+ Summary") && !txt.contains("body line"), "closed hides body");
 
         let mut open = HashSet::new();
         open.insert(0);
         let shown = frame(slide, &term(), Path::new("."), 0, 1, &Meta::default(), &open, 0);
         let txt = ops_text(&shown.ops);
-        assert!(txt.contains("⊖ Summary") && txt.contains("body line"), "open shows body");
+        assert!(txt.contains("- Summary") && txt.contains("body line"), "open shows body");
         assert!(txt.contains("  body line"), "body aligns under the summary text");
     }
 

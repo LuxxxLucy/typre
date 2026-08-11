@@ -23,7 +23,7 @@ fn build(summary: &str, body: &str) -> Block {
 
 // A collapsible details box, sized to its widest line but never past the column. Summary and
 // body wrap to fit, every summary row carries the click target for `id`, the body is drawn
-// only when open, and a `⊕`/`⊖` marker shows the state.
+// only when open, and a `+`/`-` marker shows the state.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn render(
     id: usize,
@@ -45,7 +45,7 @@ pub(crate) fn render(
         emit_inlines(inls, style, &term.with_cols(text), deck_dir, 0, 0, &mut sub);
         split_lines(sub)
     };
-    let marker = if open { "⊖" } else { "⊕" };
+    let marker = if open { "-" } else { "+" };
     let mut vlines: Vec<Vec<RenderOp>> = Vec::new();
     for (i, row) in lay(summary, heading_style()).into_iter().enumerate() {
         // every row of the summary toggles, not only the first
