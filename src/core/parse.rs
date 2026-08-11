@@ -571,6 +571,11 @@ fn strip_quotes(s: &str) -> String {
 mod tests {
     use super::*;
     use crate::core::ir::{Block, Inline, Width};
+    use crate::render::inline::flat_text;
+
+    fn body_text(body: &[Vec<Inline>]) -> Vec<String> {
+        body.iter().map(|l| flat_text(l)).collect()
+    }
 
     #[test]
     fn inline_typst_command() {
@@ -805,8 +810,8 @@ mod tests {
                 assert_eq!(art_text(b), ["└─ end"]);
                 match &**block {
                     Block::Details { summary, body } => {
-                        assert_eq!(summary, "why");
-                        assert_eq!(body, &["because"]);
+                        assert_eq!(flat_text(summary), "why");
+                        assert_eq!(body_text(body), ["because"]);
                     }
                     other => panic!("expected details, got {other:?}"),
                 }
@@ -884,8 +889,8 @@ mod tests {
         let deck = parse("◊details[Summary text]{\nbody\n}\n");
         match &deck.slides[0].blocks[0] {
             Block::Details { summary, body } => {
-                assert_eq!(summary, "Summary text");
-                assert_eq!(body, &["body"]);
+                assert_eq!(flat_text(summary), "Summary text");
+                assert_eq!(body_text(body), ["body"]);
             }
             other => panic!("expected details, got {other:?}"),
         }
@@ -894,11 +899,15 @@ mod tests {
     #[test]
     fn a_link_in_a_details_summary_keeps_its_brackets() {
         let deck = parse("◊details[see [docs](https://x.test)]{\nbody\n}\n");
-        let block = &deck.slides[0].blocks[0];
-        assert!(
-            matches!(block, Block::Details { .. }),
-            "the ] of the link does not end the argument: {block:?}"
-        );
+        match &deck.slides[0].blocks[0] {
+            Block::Details { summary, .. } => assert!(
+                summary
+                    .iter()
+                    .any(|i| matches!(i, Inline::Link { url, .. } if url == "https://x.test")),
+                "the link inside the argument is a link, not literal text: {summary:?}"
+            ),
+            other => panic!("expected details, got {other:?}"),
+        }
     }
 
 }

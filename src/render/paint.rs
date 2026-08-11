@@ -142,15 +142,6 @@ pub(crate) fn quote_style() -> Style {
     }
 }
 
-// A line that fits `w`, or the lines it wraps to.
-pub(crate) fn fit(line: &str, w: usize) -> Vec<String> {
-    if cell_width(line) <= w {
-        vec![line.to_string()]
-    } else {
-        wrap_text(line, w)
-    }
-}
-
 // Greedy wrap to `w` display columns. A line may break at a space or between wide (CJK)
 // characters, matching the paragraph flow; a narrow-script word wider than the column is
 // split mid-word, since nothing else fits.

@@ -864,6 +864,32 @@ mod tests {
     }
 
     #[test]
+    fn a_link_inside_a_details_box_is_clickable() {
+        let plain = parse("◊details[why]{\nsee [docs](https://x.test)\n}\n");
+        let nested = parse("◊figure{\n├─ branch\n│  ◊details[why]{\n│  see [docs](https://x.test)\n│  }\n}\n");
+        let mut open = HashSet::new();
+        open.insert(0);
+        for deck in [plain, nested] {
+            let f = frame(
+                &deck.slides[0],
+                &term(),
+                Path::new("."),
+                0,
+                1,
+                &Meta::default(),
+                &open,
+                0,
+            );
+            assert!(
+                f.hits
+                    .iter()
+                    .any(|h| matches!(&h.action, HitAction::OpenUrl(u) if u == "https://x.test")),
+                "the link in the body is a click target"
+            );
+        }
+    }
+
+    #[test]
     fn a_closed_details_box_glows_and_an_open_one_does_not() {
         let deck = parse("◊details[Summary]{\nbody line\n}\n");
         let slide = &deck.slides[0];

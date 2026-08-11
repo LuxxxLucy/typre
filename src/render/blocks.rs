@@ -112,7 +112,7 @@ pub(crate) fn emit_block(
         Block::Details { summary, body } => {
             let id = tg.take_id();
             let open = tg.open.contains(&id);
-            commands::details::render(id, open, summary, body, term, indent, ops);
+            commands::details::render(id, open, summary, body, term, deck_dir, indent, ops);
         }
     }
 }

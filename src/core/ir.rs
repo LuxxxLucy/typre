@@ -70,9 +70,11 @@ pub enum Block {
     },
     Tree(Vec<TreeNode>),
     Grid(Vec<String>),
+    // A collapsible box: the summary, and one entry per body line. Markup inside either is
+    // evaluated; a body line holds its own place, as a figure line does.
     Details {
-        summary: String,
-        body: Vec<String>,
+        summary: Vec<Inline>,
+        body: Vec<Vec<Inline>>,
     },
 }
 
