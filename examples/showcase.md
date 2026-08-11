@@ -98,6 +98,16 @@ The same fragment, scaled to 70% of the content column:
 └───────┘ └───────┘ └───────┘
 }
 
+◊figure keeps its lines as written, evaluates the markup in them, and hosts commands:
+
+◊figure{
+├─ a branch with a [link](https://owickstrom.github.io/the-monospace-web/) and **bold**
+│  ◊details[what this branch carries]{
+│  the box sits under the branch, and toggles on click
+│  }
+└─ the second branch
+}
+
 ## Charts
 
 ◊figure[Things I Have]{
