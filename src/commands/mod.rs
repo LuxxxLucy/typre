@@ -31,34 +31,32 @@ pub(crate) fn parse_command(after: &str) -> Option<(Frag, usize)> {
 // `◊name{body}`: return the body and the bytes consumed through the closing `}`.
 pub(crate) fn brace_cmd(after: &str, name: &str) -> Option<(String, usize)> {
     let rest = after.strip_prefix(name)?.strip_prefix('{')?;
-    let (body, used) = brace_body(rest)?;
+    let (body, used) = balanced(rest, '{', '}')?;
     Some((body, name.len() + 1 + used))
 }
 
 // `◊name[arg]{body}`: return the arg, the body, and the bytes consumed through `}`.
 pub(crate) fn bracket_cmd(after: &str, name: &str) -> Option<(String, String, usize)> {
     let rest = after.strip_prefix(name)?.strip_prefix('[')?;
-    let close = rest.find(']')?;
-    let arg = rest[..close].to_string();
-    let rest = rest[close + 1..].strip_prefix('{')?;
-    let (body, used) = brace_body(rest)?;
-    Some((arg, body, name.len() + close + 3 + used))
+    // Balanced, so a markdown link in the argument keeps its own brackets.
+    let (arg, arg_used) = balanced(rest, '[', ']')?;
+    let rest = rest[arg_used..].strip_prefix('{')?;
+    let (body, used) = balanced(rest, '{', '}')?;
+    Some((arg, body, name.len() + arg_used + 2 + used))
 }
 
-// `s` begins just after the opening `{`; return its brace-balanced body and the
-// byte count through the matching `}`.
-fn brace_body(s: &str) -> Option<(String, usize)> {
+// `s` begins just after an opening `open`; return the body up to the matching `close` and the
+// byte count through it, counting nested pairs.
+fn balanced(s: &str, open: char, close: char) -> Option<(String, usize)> {
     let mut depth = 1usize;
     for (i, c) in s.char_indices() {
-        match c {
-            '{' => depth += 1,
-            '}' => {
-                depth -= 1;
-                if depth == 0 {
-                    return Some((s[..i].to_string(), i + 1));
-                }
+        if c == open {
+            depth += 1;
+        } else if c == close {
+            depth -= 1;
+            if depth == 0 {
+                return Some((s[..i].to_string(), i + c.len_utf8()));
             }
-            _ => {}
         }
     }
     None
