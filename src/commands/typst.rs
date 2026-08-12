@@ -1,6 +1,7 @@
 use std::fs;
+use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 
 use anyhow::{bail, Context, Result};
 
@@ -68,7 +69,10 @@ pub(crate) fn render_fragment(
     let hash = blake3::hash(format!("{mode}{ppi}{src}{deps}").as_bytes())
         .to_hex()
         .to_string();
-    let cache_dir = deck_dir.join(".typre-cache");
+    // The cache lives in the temporary directory, not beside the deck: a PNG is named by the
+    // hash of what produced it, so nothing there is worth keeping and nothing is worth
+    // writing into the author's folder.
+    let cache_dir = std::env::temp_dir().join("typre-cache");
     let png = cache_dir.join(format!("{hash}.png"));
     if png.exists() {
         return Ok(png);
@@ -84,22 +88,30 @@ pub(crate) fn render_fragment(
     let wrapped = format!(
         "#set page(width: auto, height: auto, margin: 0pt, fill: none)\n#set text(fill: white)\n{MATH_SHIM}{body}"
     );
-    let tmp = deck_dir.join(format!(".typre-frag-{hash}.typ"));
-    fs::write(&tmp, wrapped).context("write temp typst")?;
-
-    let result = Command::new("typst")
+    // The source goes in on stdin, so no scratch file lands next to the deck. A relative
+    // import in it resolves against `--root`, which is the deck's own directory.
+    let mut child = Command::new("typst")
         .arg("compile")
         .arg("--root")
         .arg(deck_dir)
         .arg("--ppi")
         .arg(ppi.to_string())
-        .arg(&tmp)
+        .arg("-")
         .arg(&png)
-        .output();
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .context("spawn typst")?;
+    child
+        .stdin
+        .take()
+        .context("typst stdin")?
+        .write_all(wrapped.as_bytes())
+        .context("write typst source")?;
+    let result = child.wait_with_output();
 
-    let _ = fs::remove_file(&tmp);
-
-    let out = result.context("spawn typst")?;
+    let out = result.context("run typst")?;
     if !out.status.success() {
         bail!(
             "typst compile failed:\n{}",

@@ -1,6 +1,4 @@
 /target
-/examples/.typre-cache
 /Cargo.lock
 /.DS_Store
-/examples/.termpre-cache
 /examples/*.png

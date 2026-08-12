@@ -569,17 +569,12 @@ fn present(deck_path: &Path, deck_dir: &Path, out: &mut impl Write) -> Result<()
         return Ok(());
     }
 
-    // Reload on deck or imported-asset changes; ignore our own cache/temp writes.
+    // Reload on deck or imported-asset changes. Nothing typre writes lands in this directory,
+    // so any event here is the author's.
     let (tx, rx) = mpsc::channel();
     let mut watcher = notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
-        if let Ok(ev) = res {
-            if ev
-                .paths
-                .iter()
-                .any(|p| !p.to_string_lossy().contains(".typre-"))
-            {
-                let _ = tx.send(());
-            }
+        if res.is_ok() {
+            let _ = tx.send(());
         }
     })?;
     watcher.watch(deck_dir, RecursiveMode::NonRecursive)?;
