@@ -77,8 +77,7 @@ pub(crate) fn emit_block(
             commands::typst::render_block(src, *width, term, deck_dir, indent, ops)
         }
         Block::Image { src, alt } => {
-            let png_path = deck_dir.join(src);
-            if png_path.exists() {
+            if let Some(png_path) = image_file(src, deck_dir) {
                 place_image(ops, png_path, term, indent, Width::Natural);
                 if !alt.is_empty() {
                     let content_w = (term.cols as usize).saturating_sub(indent);
@@ -115,6 +114,16 @@ pub(crate) fn emit_block(
             commands::details::render(id, open, summary, body, term, deck_dir, indent, ops);
         }
     }
+}
+
+// The PNG behind an image block. A local source is a path beside the deck; a remote one is
+// downloaded into the cache, and the alt text stands in until it lands.
+fn image_file(src: &str, deck_dir: &Path) -> Option<PathBuf> {
+    if crate::cache::is_remote(src) {
+        return crate::cache::remote_image(src);
+    }
+    let path = deck_dir.join(src);
+    path.exists().then_some(path)
 }
 
 fn code_label_style() -> Style {

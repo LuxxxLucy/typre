@@ -69,10 +69,7 @@ pub(crate) fn render_fragment(
     let hash = blake3::hash(format!("{mode}{ppi}{src}{deps}").as_bytes())
         .to_hex()
         .to_string();
-    // The cache lives in the temporary directory, not beside the deck: a PNG is named by the
-    // hash of what produced it, so nothing there is worth keeping and nothing is worth
-    // writing into the author's folder.
-    let cache_dir = std::env::temp_dir().join("typre-cache");
+    let cache_dir = crate::cache::dir();
     let png = cache_dir.join(format!("{hash}.png"));
     if png.exists() {
         return Ok(png);

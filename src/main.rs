@@ -1,3 +1,4 @@
+mod cache;
 mod commands;
 mod core;
 mod diacritics;
@@ -579,6 +580,11 @@ fn present(deck_path: &Path, deck_dir: &Path, out: &mut impl Write) -> Result<()
     })?;
     watcher.watch(deck_dir, RecursiveMode::NonRecursive)?;
 
+    // Redraw when a remote image finishes downloading. The deck itself is unchanged, so this
+    // is a separate channel from the watcher's and keeps the place on the slide.
+    let (dl_tx, dl_rx) = mpsc::channel();
+    cache::notify_redraws(dl_tx);
+
     // Per-slide open details ids and the current slide's scroll offset.
     let mut open: HashMap<usize, HashSet<usize>> = HashMap::new();
     let mut scroll = 0usize;
@@ -683,6 +689,10 @@ fn present(deck_path: &Path, deck_dir: &Path, out: &mut impl Write) -> Result<()
             deck = load(deck_path);
             nav.set_len(deck.slides.len());
             scroll = 0;
+            dirty = true;
+        }
+
+        if dl_rx.try_iter().count() > 0 {
             dirty = true;
         }
 
