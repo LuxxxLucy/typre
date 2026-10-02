@@ -2,7 +2,7 @@ use pulldown_cmark::{Alignment, CodeBlockKind, Event, HeadingLevel, Options, Par
 
 use crate::commands::{parse_command, Frag};
 use crate::core::ir::{
-    guides, Align, ArtLine, ArtPart, Block, Deck, Inline, Meta, Slide, Style, Width,
+    guides, plain_text, Align, ArtLine, ArtPart, Block, Deck, Inline, Meta, Slide, Style, TocEntry, Width,
 };
 
 pub fn parse(md: &str) -> Deck {
@@ -63,20 +63,7 @@ pub fn parse(md: &str) -> Deck {
                 inlines = Vec::new();
             }
             Event::End(TagEnd::Paragraph) => {
-                let mut inl = std::mem::take(&mut inlines);
-                // A paragraph that is a single ◊ fragment becomes its block: typst
-                // turns into block math, a structured command into its own block.
-                if inl.len() == 1 {
-                    match inl.pop().unwrap() {
-                        Inline::InlineTypst { src, width, display: true } => {
-                            push_block(&mut block_stack, Block::BlockTypst { src, width })
-                        }
-                        Inline::BlockFragment(b) => push_block(&mut block_stack, *b),
-                        other => push_block(&mut block_stack, Block::Paragraph(vec![other])),
-                    }
-                } else if !inl.is_empty() {
-                    push_block(&mut block_stack, Block::Paragraph(inl));
-                }
+                flush_paragraph(&mut block_stack, &mut inlines);
             }
 
             Event::Start(Tag::List(start)) => {
@@ -224,6 +211,19 @@ pub fn parse(md: &str) -> Deck {
         slides.push(Slide::default());
     }
 
+    if slides[0].is_title() {
+        slides[0].toc = slides
+            .iter()
+            .enumerate()
+            .filter_map(|(index, slide)| match slide.blocks.first() {
+                Some(Block::Heading(2, inlines)) => Some(TocEntry {
+                    index,
+                    title: plain_text(inlines),
+                }),
+                _ => None,
+            })
+            .collect();
+    }
     Deck { meta, slides }
 }
 
@@ -238,10 +238,31 @@ fn push_block(stack: &mut [Vec<Block>], block: Block) {
 }
 
 fn flush_paragraph(stack: &mut [Vec<Block>], inlines: &mut Vec<Inline>) {
-    let inl = std::mem::take(inlines);
-    if !inl.is_empty() {
-        push_block(stack, Block::Paragraph(inl));
+    fn flush_run(stack: &mut [Vec<Block>], run: &mut Vec<Inline>) {
+        if run.len() == 1 && matches!(run[0], Inline::InlineTypst { display: true, .. }) {
+            if let Inline::InlineTypst { src, width, .. } = run.pop().unwrap() {
+                push_block(stack, Block::BlockTypst { src, width });
+            }
+        } else if !run.is_empty() {
+            push_block(stack, Block::Paragraph(std::mem::take(run)));
+        }
     }
+
+    if !inlines.iter().any(|inline| matches!(inline, Inline::BlockFragment(_))) {
+        flush_run(stack, inlines);
+        return;
+    }
+    let mut run = Vec::new();
+    for inline in std::mem::take(inlines) {
+        match inline {
+            Inline::BlockFragment(block) => {
+                flush_run(stack, &mut run);
+                push_block(stack, *block);
+            }
+            inline => run.push(inline),
+        }
+    }
+    flush_run(stack, &mut run);
 }
 
 struct TableBuilder {
@@ -300,16 +321,23 @@ const SENTINEL: char = '\u{F8FF}';
 fn extract_typst(md: &str) -> (String, Vec<Frag>) {
     let mut out = String::new();
     let mut frags = Vec::new();
-    let mut fenced = false;
+    let mut fenced: Option<(u8, usize)> = None;
     let mut buf = String::new();
     for line in md.split_inclusive('\n') {
         let trimmed = line.trim_start();
-        if trimmed.starts_with("```") || trimmed.starts_with("~~~") {
+        let marker = trimmed.as_bytes().first().copied().unwrap_or(0);
+        let count = trimmed.bytes().take_while(|&b| b == marker).count();
+        if let Some((open, length)) = fenced {
+            if marker == open && count >= length && trimmed[count..].trim().is_empty() {
+                fenced = None;
+            }
+            out.push_str(line);
+        } else if matches!(marker, b'`' | b'~') && count >= 3
+            && (marker != b'`' || !trimmed[count..].contains('`'))
+        {
             extract_commands(&buf, &mut out, &mut frags);
             buf.clear();
-            fenced = !fenced;
-            out.push_str(line);
-        } else if fenced {
+            fenced = Some((marker, count));
             out.push_str(line);
         } else {
             if let Some(head) = missing_head(line, buf.lines().last()) {
@@ -415,18 +443,41 @@ fn command_at(raw: &[&str]) -> Option<(String, Block, usize)> {
     if !guide.chars().all(guides) {
         return None;
     }
-    let dedented: Vec<&str> = raw
-        .iter()
-        .map(|l| l.strip_prefix(guide).unwrap_or(l))
-        .collect();
-    let body = dedented.join("\n");
-    let open = start - guide.len() + '◊'.len_utf8();
+    let mut body = String::new();
+    let mut brackets = 0usize;
+    let mut braces = 0usize;
+    let mut used = 0;
+    'lines: for line in raw {
+        let line = line.strip_prefix(guide).unwrap_or(line);
+        if used > 0 {
+            body.push('\n');
+        }
+        body.push_str(line);
+        used += 1;
+        for c in line.chars() {
+            match c {
+                '[' if braces == 0 => brackets += 1,
+                ']' if braces == 0 => brackets = brackets.checked_sub(1)?,
+                '{' if brackets == 0 => braces += 1,
+                '}' if brackets == 0 => {
+                    braces = braces.checked_sub(1)?;
+                    if braces == 0 {
+                        break 'lines;
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    let open = '◊'.len_utf8();
     let (frag, consumed) = parse_command(&body[open..])?;
+    if !body[open + consumed..].trim().is_empty() {
+        return None;
+    }
     let block = match frag {
         Frag::Block(b) => b,
         Frag::Inline { src, width } => Block::BlockTypst { src, width },
     };
-    let used = body[..open + consumed].matches('\n').count() + 1;
     Some((guide.to_string(), block, used))
 }
 
@@ -473,18 +524,19 @@ fn extract_commands(text: &str, out: &mut String, frags: &mut Vec<Frag>) {
 // run) verbatim and return its byte length. An unclosed run copies just the run.
 fn copy_code_span(s: &str, out: &mut String) -> usize {
     let n = s.bytes().take_while(|&b| b == b'`').count();
-    let fence = "`".repeat(n);
-    match s[n..].find(&fence) {
-        Some(rel) => {
-            let end = n + rel + n;
+    let mut pos = n;
+    while let Some(rel) = s[pos..].find('`') {
+        pos += rel;
+        let length = s[pos..].bytes().take_while(|&b| b == b'`').count();
+        if length == n {
+            let end = pos + n;
             out.push_str(&s[..end]);
-            end
+            return end;
         }
-        None => {
-            out.push_str(&s[..n]);
-            n
-        }
+        pos += length;
     }
+    out.push_str(&s[..n]);
+    n
 }
 
 fn push_text(inlines: &mut Vec<Inline>, t: &str, style: Style, frags: &[Frag]) {
@@ -571,7 +623,7 @@ fn strip_quotes(s: &str) -> String {
 mod tests {
     use super::*;
     use crate::core::ir::{Block, Inline, Width};
-    use crate::render::inline::flat_text;
+    use crate::core::ir::plain_text as flat_text;
 
     fn body_text(body: &[Vec<Inline>]) -> Vec<String> {
         body.iter().map(|l| flat_text(l)).collect()
@@ -741,7 +793,7 @@ mod tests {
     fn art_text(lines: &[ArtLine]) -> Vec<String> {
         lines
             .iter()
-            .map(|l| format!("{}{}", l.guide, crate::render::inline::flat_text(&l.inls)))
+            .map(|l| format!("{}{}", l.guide, flat_text(&l.inls)))
             .collect()
     }
 
@@ -874,7 +926,7 @@ mod tests {
         let deck = parse("◊figure[My caption]{\nart\n}\n");
         match &deck.slides[0].blocks[0] {
             Block::Art { parts, caption } => {
-                assert_eq!(crate::render::inline::flat_text(caption), "My caption");
+                assert_eq!(flat_text(caption), "My caption");
                 match &parts[..] {
                     [ArtPart::Lines(l)] => assert_eq!(art_text(l), ["art"]),
                     other => panic!("expected one run of lines, got {other:?}"),
@@ -908,6 +960,104 @@ mod tests {
             ),
             other => panic!("expected details, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn tight_and_loose_items_share_command_promotion() {
+        for source in ["- ◊tree{root}\n", "- ◊tree{root}\n\n- next\n"] {
+            let deck = parse(source);
+            let Block::List { items, .. } = &deck.slides[0].blocks[0] else {
+                panic!("expected list");
+            };
+            assert!(matches!(&items[0][0], Block::Tree(nodes) if nodes[0].label == "root"));
+        }
+        let deck = parse("- ◊typst{x}\n");
+        let Block::List { items, .. } = &deck.slides[0].blocks[0] else {
+            panic!("expected list");
+        };
+        assert!(matches!(&items[0][0], Block::BlockTypst { src, .. } if src == "x"));
+    }
+
+    #[test]
+    fn commands_split_paragraphs_without_losing_text() {
+        for source in ["before ◊tree{root} after", "- before ◊tree{root} after"] {
+            let deck = parse(source);
+            let blocks = match &deck.slides[0].blocks[0] {
+                Block::List { items, .. } => &items[0],
+                _ => &deck.slides[0].blocks,
+            };
+            assert_eq!(blocks.len(), 3);
+            assert!(matches!(&blocks[0], Block::Paragraph(inls) if flat_text(inls) == "before "));
+            assert!(matches!(&blocks[1], Block::Tree(nodes) if nodes[0].label == "root"));
+            assert!(matches!(&blocks[2], Block::Paragraph(inls) if flat_text(inls) == " after"));
+        }
+    }
+
+    #[test]
+    fn nested_command_requires_an_empty_line_suffix() {
+        assert!(command_at(&["│ ◊tree{root} trailing"]).is_none());
+        let (_, block, used) = command_at(&[
+            "│ ◊details[why {this}]{",
+            "│ answer",
+            "│ }  ",
+            "│ following line",
+        ]).unwrap();
+        assert!(matches!(block, Block::Details { .. }));
+        assert_eq!(used, 3);
+        let deck = parse("◊figure{\n◊tree{root} trailing\n}");
+        let Block::Art { parts, .. } = &deck.slides[0].blocks[0] else {
+            panic!("expected figure");
+        };
+        let ArtPart::Lines(lines) = &parts[0] else {
+            panic!("expected literal line");
+        };
+        assert_eq!(art_text(lines), ["◊tree{root} trailing"]);
+    }
+
+    #[test]
+    fn sibling_commands_keep_independent_boundaries() {
+        let source = "◊tree{root}\n".repeat(1000);
+        let parts = art_parts(&source);
+        assert_eq!(parts.len(), 1000);
+        assert!(parts.iter().all(|part| matches!(part, ArtPart::Nested { block, .. }
+            if matches!(&**block, Block::Tree(nodes) if nodes[0].label == "root"))));
+    }
+
+    #[test]
+    fn fenced_code_requires_matching_markers_and_lengths() {
+        for (open, false_close, close) in [
+            ("````", "```", "````"),
+            ("```", "~~~", "```"),
+            ("~~~", "```", "~~~"),
+            ("```", "``` text", "```"),
+        ] {
+            let source = format!("{open}\n{false_close}\n◊tree{{literal}}\n{close}\n\n◊tree{{real}}");
+            let deck = parse(&source);
+            assert!(matches!(&deck.slides[0].blocks[0], Block::Code { src, .. }
+                if src.contains("◊tree{literal}")));
+            assert!(matches!(&deck.slides[0].blocks[1], Block::Tree(nodes)
+                if nodes[0].label == "real"));
+        }
+    }
+
+    #[test]
+    fn inline_code_requires_an_exact_backtick_run() {
+        let deck = parse("`a `` ◊tree{literal} ` ◊tree{real}");
+        assert!(matches!(&deck.slides[0].blocks[0], Block::Paragraph(inls)
+            if matches!(&inls[0], Inline::Code(text) if text == "a `` ◊tree{literal} ")));
+        assert!(matches!(&deck.slides[0].blocks[1], Block::Tree(nodes)
+            if nodes[0].label == "real"));
+    }
+
+    #[test]
+    fn parse_attaches_sections_to_the_opening_title() {
+        let deck = parse("# Title\n\n## A **bold** [link](https://example.com)\n\n## B `code`");
+        assert_eq!(deck.slides[0].toc.len(), 2);
+        assert_eq!(deck.slides[0].toc[0].index, 1);
+        assert_eq!(deck.slides[0].toc[0].title, "A bold link");
+        assert_eq!(deck.slides[0].toc[1].title, "B code");
+        assert!(deck.slides[1].toc.is_empty());
+        assert!(parse("## A\n\n# Title\n\n## B").slides.iter().all(|slide| slide.toc.is_empty()));
     }
 
 }

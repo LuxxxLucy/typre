@@ -143,6 +143,17 @@ pub enum Inline {
     HardBreak,
 }
 
+pub fn plain_text(inlines: &[Inline]) -> String {
+    inlines
+        .iter()
+        .filter_map(|inline| match inline {
+            Inline::Text(text, _) | Inline::Code(text) => Some(text.as_str()),
+            Inline::Link { label, .. } => Some(label.as_str()),
+            _ => None,
+        })
+        .collect()
+}
+
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Style {
     // Text that cycles through the spectrum frame by frame, to say a box opens on click.
@@ -155,7 +166,7 @@ pub struct Style {
     pub quote: bool,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum RenderOp {
     MoveTo(u16, u16),
     Text(String, Style),
