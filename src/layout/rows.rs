@@ -1,3 +1,4 @@
+use super::text::cell_width;
 use super::{Hit, RenderOp};
 
 #[derive(Default)]
@@ -33,4 +34,32 @@ impl Body {
             .collect();
         (ops, hits)
     }
+}
+
+// Split an op stream into visual lines at LineBreaks, dropping the trailing empty
+// line every block leaves behind.
+pub fn split_lines(ops: Vec<RenderOp>) -> Vec<Vec<RenderOp>> {
+    let mut lines = vec![Vec::new()];
+    for op in ops {
+        if let RenderOp::LineBreak = op {
+            lines.push(Vec::new());
+        } else {
+            lines.last_mut().unwrap().push(op);
+        }
+    }
+    if lines.last().is_some_and(|l| l.is_empty()) {
+        lines.pop();
+    }
+    lines
+}
+
+pub fn line_width(line: &[RenderOp]) -> usize {
+    line.iter()
+        .map(|op| match op {
+            RenderOp::Text(t, _) => cell_width(t),
+            RenderOp::ImageRow { cols, .. } => *cols as usize,
+            RenderOp::Link { label, .. } => cell_width(label),
+            _ => 0,
+        })
+        .sum()
 }

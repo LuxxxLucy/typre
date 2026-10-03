@@ -1,9 +1,12 @@
-pub mod blocks;
+mod art;
+pub(crate) mod blocks;
+mod boxes;
 mod commands;
 pub mod frame;
 pub mod inline;
 pub mod paint;
 pub mod slide_template;
+mod table;
 
 use std::collections::HashSet;
 
@@ -16,7 +19,7 @@ use crate::layout::TermInfo;
 pub fn body(slide: &Slide, term: &TermInfo, assets: &Assets, open: &HashSet<usize>) -> Body {
     let (ops, hits) = slide_template::render(slide, term, assets, open);
     Body {
-        rows: blocks::split_lines(ops),
+        rows: crate::layout::split_lines(ops),
         hits,
     }
 }
@@ -58,7 +61,7 @@ mod tests {
         ops.push(RenderOp::Text("after".to_string(), Style::default()));
         ops.push(RenderOp::LineBreak);
         let body = Body {
-            rows: blocks::split_lines(ops),
+            rows: crate::layout::split_lines(ops),
             hits: vec![Hit {
                 row: 2,
                 cols: 1..3,

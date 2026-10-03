@@ -2,7 +2,8 @@ use crate::assets::Assets;
 use crate::core::ir::{Inline, Style};
 use crate::layout::RenderOp;
 use crate::layout::TermInfo;
-use crate::render::blocks::{emit_box, line_width, split_lines, BoxDeco};
+use crate::layout::{line_width, split_lines};
+use crate::render::boxes::{emit_box, BoxDeco};
 use crate::render::inline::emit_inlines;
 use crate::render::paint::heading_style;
 

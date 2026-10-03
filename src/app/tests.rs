@@ -32,7 +32,7 @@ fn frame(
     )
 }
 use crate::core::parse::parse;
-use crate::render::blocks::{line_width, split_lines};
+use crate::layout::{line_width, split_lines};
 
 fn term() -> TermInfo {
     TermInfo {

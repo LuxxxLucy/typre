@@ -5,7 +5,9 @@ use crate::core::ir::{Block, Inline, Slide, TocEntry};
 use crate::layout::ops::hits as click_hits;
 use crate::layout::RenderOp;
 use crate::layout::{layout, TermInfo};
-use crate::render::blocks::{emit_block, emit_box, line_width, split_lines, BoxDeco, Toggles};
+use crate::layout::{line_width, split_lines};
+use crate::render::blocks::{emit_block, Toggles};
+use crate::render::boxes::{emit_box, BoxDeco};
 use crate::render::inline::{emit_inlines, uppercase_inlines};
 use crate::render::paint::{
     cell_width, current_row, dim_style, heading_style, indent_op, truncate, Hit, HitAction,

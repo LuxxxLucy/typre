@@ -1,7 +1,7 @@
 pub mod ops;
 mod rows;
 pub use ops::{GlowRun, Hit, HitAction, RenderOp};
-pub use rows::Body;
+pub use rows::{line_width, split_lines, Body};
 
 pub(crate) mod text;
 

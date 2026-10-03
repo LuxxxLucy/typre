@@ -224,7 +224,7 @@ pub(crate) use crate::core::ir::plain_text as flat_text;
 mod tests {
     use super::*;
     use crate::layout::ops::{hits, positions};
-    use crate::render::blocks::split_lines;
+    use crate::layout::split_lines;
     use crate::render::paint::wrap_text;
 
     #[test]
@@ -286,6 +286,6 @@ mod tests {
         assert!(targets.iter().any(|hit| hit.row == 1 && hit.cols == (0..3)));
         assert!(split_lines(ops)
             .iter()
-            .all(|line| crate::render::blocks::line_width(line) <= 5));
+            .all(|line| crate::layout::line_width(line) <= 5));
     }
 }
