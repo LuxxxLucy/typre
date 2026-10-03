@@ -1,5 +1,4 @@
-// The ◊ commands. Each command owns its body parsing and rendering in its own
-// module; this file parses the shared `◊name[arg]{body}` envelope and dispatches.
+// Parse the shared ◊name[arg]{body} envelope and dispatch its body.
 use crate::core::ir::{Block, Width};
 
 pub mod details;

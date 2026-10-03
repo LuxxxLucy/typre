@@ -1,8 +1,9 @@
 use pulldown_cmark::{Alignment, CodeBlockKind, Event, HeadingLevel, Options, Parser, Tag, TagEnd};
 
-use crate::commands::{parse_command, Frag};
+use super::commands::{parse_command, Frag};
 use crate::core::ir::{
-    guides, plain_text, Align, ArtLine, ArtPart, Block, Deck, Inline, Meta, Slide, Style, TocEntry, Width,
+    guides, plain_text, Align, ArtLine, ArtPart, Block, Deck, Inline, Meta, Slide, Style, TocEntry,
+    Width,
 };
 
 pub fn parse(md: &str) -> Deck {
@@ -227,7 +228,7 @@ pub fn parse(md: &str) -> Deck {
     Deck { meta, slides }
 }
 
-fn flush_slide(slides: &mut Vec<Slide>, block_stack: &mut Vec<Vec<Block>>) {
+fn flush_slide(slides: &mut Vec<Slide>, block_stack: &mut [Vec<Block>]) {
     let root = std::mem::take(&mut block_stack[0]);
     slides.last_mut().unwrap().blocks = root;
     slides.push(Slide::default());
@@ -248,7 +249,10 @@ fn flush_paragraph(stack: &mut [Vec<Block>], inlines: &mut Vec<Inline>) {
         }
     }
 
-    if !inlines.iter().any(|inline| matches!(inline, Inline::BlockFragment(_))) {
+    if !inlines
+        .iter()
+        .any(|inline| matches!(inline, Inline::BlockFragment(_)))
+    {
         flush_run(stack, inlines);
         return;
     }
@@ -332,7 +336,8 @@ fn extract_typst(md: &str) -> (String, Vec<Frag>) {
                 fenced = None;
             }
             out.push_str(line);
-        } else if matches!(marker, b'`' | b'~') && count >= 3
+        } else if matches!(marker, b'`' | b'~')
+            && count >= 3
             && (marker != b'`' || !trimmed[count..].contains('`'))
         {
             extract_commands(&buf, &mut out, &mut frags);
@@ -588,7 +593,11 @@ fn push_text(inlines: &mut Vec<Inline>, t: &str, style: Style, frags: &[Frag]) {
 
 fn math_inline(latex: &str, display: bool, style: Style) -> Inline {
     match mitex::convert_math(latex, None) {
-        Ok(src) => Inline::InlineTypst { src, width: Width::Natural, display },
+        Ok(src) => Inline::InlineTypst {
+            src,
+            width: Width::Natural,
+            display,
+        },
         Err(e) => Inline::Text(format!("[math error: {e}]"), style),
     }
 }
@@ -622,8 +631,8 @@ fn strip_quotes(s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::ir::{Block, Inline, Width};
     use crate::core::ir::plain_text as flat_text;
+    use crate::core::ir::{Block, Inline, Width};
 
     fn body_text(body: &[Vec<Inline>]) -> Vec<String> {
         body.iter().map(|l| flat_text(l)).collect()
@@ -649,7 +658,10 @@ mod tests {
         let deck = parse("|:--|:--|\n| a | 1 |\n| b | 2 |\n");
         match &deck.slides[0].blocks[0] {
             Block::Table { head, rows, .. } => {
-                assert!(head.iter().all(|cell| cell.is_empty()), "an empty header: {head:?}");
+                assert!(
+                    head.iter().all(|cell| cell.is_empty()),
+                    "an empty header: {head:?}"
+                );
                 assert_eq!(rows.len(), 2, "both lines are body rows");
             }
             other => panic!("expected a table, got {other:?}"),
@@ -695,11 +707,13 @@ mod tests {
             other => panic!("expected paragraph, got {other:?}"),
         };
         assert!(
-            inls.iter().any(|i| matches!(i, Inline::Code(s) if s == "◊typst{x}")),
+            inls.iter()
+                .any(|i| matches!(i, Inline::Code(s) if s == "◊typst{x}")),
             "backticked command stays literal"
         );
         assert!(
-            inls.iter().any(|i| matches!(i, Inline::InlineTypst { src, .. } if src == "y")),
+            inls.iter()
+                .any(|i| matches!(i, Inline::InlineTypst { src, .. } if src == "y")),
             "the real command outside backticks still extracts"
         );
     }
@@ -783,7 +797,10 @@ mod tests {
         match &deck.slides[0].blocks[0] {
             Block::Code { src, lang } => {
                 assert!(lang.is_none());
-                assert_eq!(src, "◊details[not a command here]{x}", "a fence evaluates nothing");
+                assert_eq!(
+                    src, "◊details[not a command here]{x}",
+                    "a fence evaluates nothing"
+                );
             }
             other => panic!("expected code, got {other:?}"),
         }
@@ -825,12 +842,16 @@ mod tests {
         };
         assert_eq!(line.guide, "│  ", "the guides are kept as written");
         assert!(
-            line.inls.iter().any(|i| matches!(i, Inline::Link { url, .. } if url == "https://x.test")),
+            line.inls
+                .iter()
+                .any(|i| matches!(i, Inline::Link { url, .. } if url == "https://x.test")),
             "the link is a link: {:?}",
             line.inls
         );
         assert!(
-            line.inls.iter().any(|i| matches!(i, Inline::Text(t, s) if t == "bold" && s.bold)),
+            line.inls
+                .iter()
+                .any(|i| matches!(i, Inline::Text(t, s) if t == "bold" && s.bold)),
             "the emphasis applies: {:?}",
             line.inls
         );
@@ -1001,7 +1022,8 @@ mod tests {
             "│ answer",
             "│ }  ",
             "│ following line",
-        ]).unwrap();
+        ])
+        .unwrap();
         assert!(matches!(block, Block::Details { .. }));
         assert_eq!(used, 3);
         let deck = parse("◊figure{\n◊tree{root} trailing\n}");
@@ -1019,7 +1041,9 @@ mod tests {
         let source = "◊tree{root}\n".repeat(1000);
         let parts = art_parts(&source);
         assert_eq!(parts.len(), 1000);
-        assert!(parts.iter().all(|part| matches!(part, ArtPart::Nested { block, .. }
+        assert!(parts
+            .iter()
+            .all(|part| matches!(part, ArtPart::Nested { block, .. }
             if matches!(&**block, Block::Tree(nodes) if nodes[0].label == "root"))));
     }
 
@@ -1031,7 +1055,8 @@ mod tests {
             ("~~~", "```", "~~~"),
             ("```", "``` text", "```"),
         ] {
-            let source = format!("{open}\n{false_close}\n◊tree{{literal}}\n{close}\n\n◊tree{{real}}");
+            let source =
+                format!("{open}\n{false_close}\n◊tree{{literal}}\n{close}\n\n◊tree{{real}}");
             let deck = parse(&source);
             assert!(matches!(&deck.slides[0].blocks[0], Block::Code { src, .. }
                 if src.contains("◊tree{literal}")));
@@ -1057,7 +1082,9 @@ mod tests {
         assert_eq!(deck.slides[0].toc[0].title, "A bold link");
         assert_eq!(deck.slides[0].toc[1].title, "B code");
         assert!(deck.slides[1].toc.is_empty());
-        assert!(parse("## A\n\n# Title\n\n## B").slides.iter().all(|slide| slide.toc.is_empty()));
+        assert!(parse("## A\n\n# Title\n\n## B")
+            .slides
+            .iter()
+            .all(|slide| slide.toc.is_empty()));
     }
-
 }

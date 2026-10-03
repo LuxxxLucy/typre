@@ -1,3 +1,10 @@
+pub mod ops;
+mod rows;
+pub use ops::{GlowRun, Hit, HitAction, RenderOp};
+pub use rows::Body;
+
+pub(crate) mod text;
+
 // Terminal resolution and the slide geometry derived from it.
 
 pub struct TermInfo {
@@ -34,7 +41,7 @@ const MARGIN: usize = 4;
 // MARGIN to either edge. On a wide terminal the slack splits evenly left and right.
 pub(crate) fn layout(term: &TermInfo) -> (usize, usize) {
     let cols = term.cols as usize;
-    let content_w = cols.saturating_sub(MARGIN * 2).min(MAX_CONTENT_W).max(1);
+    let content_w = cols.saturating_sub(MARGIN * 2).clamp(1, MAX_CONTENT_W);
     let margin = cols.saturating_sub(content_w) / 2;
     (margin, content_w)
 }

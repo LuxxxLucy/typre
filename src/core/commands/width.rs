@@ -4,7 +4,13 @@ use super::{bracket_cmd, Frag};
 
 pub(crate) fn parse(after: &str) -> Option<(Frag, usize)> {
     let (arg, body, used) = bracket_cmd(after, "width")?;
-    Some((Frag::Inline { src: body, width: value(&arg) }, used))
+    Some((
+        Frag::Inline {
+            src: body,
+            width: value(&arg),
+        },
+        used,
+    ))
 }
 
 fn value(spec: &str) -> Width {

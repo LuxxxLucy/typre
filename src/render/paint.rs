@@ -1,46 +1,17 @@
 // Drawing vocabulary: click targets, render-op helpers, styles, and box rules.
-use std::cell::RefCell;
-use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use crate::assets::Assets;
+use std::path::PathBuf;
 
-use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
+pub(crate) use crate::layout::text::{break_units, cell_width, truncate, wrap_text};
 
-use crate::core::ir::{Align, RenderOp, Style, Width};
+use crate::core::ir::{Align, Style, Width};
+use crate::layout::RenderOp;
 use crate::layout::TermInfo;
 
-// Terminal cell width: CJK and other wide glyphs occupy two columns.
-pub(crate) fn cell_width(s: &str) -> usize {
-    UnicodeWidthStr::width(s)
-}
-
-pub(crate) fn char_cells(c: char) -> usize {
-    UnicodeWidthChar::width(c).unwrap_or(0)
-}
-
-#[derive(Debug)]
-pub struct Hit {
-    pub row: u16,
-    pub cols: std::ops::Range<u16>,
-    pub action: HitAction,
-}
-
-#[derive(Debug, Clone)]
-pub enum HitAction {
-    ToggleDetails(usize),
-    OpenUrl(String),
-    Goto(usize),
-}
+pub use crate::layout::{Hit, HitAction};
 
 pub(crate) fn indent_op(indent: usize) -> RenderOp {
     RenderOp::Text(" ".repeat(indent), Style::default())
-}
-
-// A block image is placed with kitty C=1 (the cursor does not move), so advance
-// past it by its row count to keep the next block from overlapping it.
-pub(crate) fn advance_rows(ops: &mut Vec<RenderOp>, rows: u16) {
-    for _ in 0..rows {
-        ops.push(RenderOp::LineBreak);
-    }
 }
 
 // Current cursor row in the body flow: one per line break emitted so far.
@@ -54,14 +25,14 @@ pub(crate) fn current_row(ops: &[RenderOp]) -> usize {
 // that width. Width alone sets the scale; the height follows the aspect ratio,
 // and a slide taller than the viewport scrolls.
 pub(crate) fn image_cells(
-    png_path: &Path,
+    dimensions: Option<(u32, u32)>,
     term: &TermInfo,
     indent: usize,
     width: Width,
 ) -> (u16, u16) {
     let cell_w = term.cell_w_px.max(1) as f32;
     let cell_h = term.cell_h_px.max(1) as f32;
-    let (w, h) = image_dims(png_path).unwrap_or((cell_w as u32, cell_h as u32));
+    let (w, h) = dimensions.unwrap_or((cell_w as u32, cell_h as u32));
     let nat_cols = (w as f32 / cell_w).max(1.0);
     let nat_rows = (h as f32 / cell_h).max(1.0);
     let content_w = (term.cols as usize).saturating_sub(indent).max(1) as f32;
@@ -76,33 +47,27 @@ pub(crate) fn image_cells(
     (cols, rows)
 }
 
-// Image pixel dimensions, memoized. PNG cache paths are content-hashed, so a path
-// maps to fixed bytes for the process lifetime and never needs re-reading.
-pub(crate) fn image_dims(png_path: &Path) -> Option<(u32, u32)> {
-    thread_local! {
-        static CACHE: RefCell<HashMap<PathBuf, (u32, u32)>> = RefCell::new(HashMap::new());
-    }
-    if let Some(d) = CACHE.with(|c| c.borrow().get(png_path).copied()) {
-        return Some(d);
-    }
-    let d = image::image_dimensions(png_path).ok()?;
-    CACHE.with(|c| c.borrow_mut().insert(png_path.to_path_buf(), d));
-    Some(d)
-}
-
 pub(crate) fn place_image(
     ops: &mut Vec<RenderOp>,
     png_path: PathBuf,
+    assets: &Assets,
     term: &TermInfo,
     indent: usize,
     width: Width,
 ) -> (u16, u16) {
-    let (cols, rows) = image_cells(&png_path, term, indent, width);
+    let (cols, rows) = image_cells(assets.dimensions(&png_path), term, indent, width);
     let content_w = (term.cols as usize).saturating_sub(indent);
     let slack = content_w.saturating_sub(cols as usize) / 2;
-    ops.push(indent_op(indent + slack));
-    ops.push(RenderOp::Image { png_path, cols, rows });
-    advance_rows(ops, rows);
+    for row in 0..rows {
+        ops.push(indent_op(indent + slack));
+        ops.push(RenderOp::ImageRow {
+            png_path: png_path.clone(),
+            cols,
+            rows,
+            row,
+        });
+        ops.push(RenderOp::LineBreak);
+    }
     (cols, rows)
 }
 
@@ -140,61 +105,6 @@ pub(crate) fn quote_style() -> Style {
         quote: true,
         ..Style::default()
     }
-}
-
-// Greedy wrap to `w` display columns. A line may break at a space or between wide (CJK)
-// characters, matching the paragraph flow; a narrow-script word wider than the column is
-// split mid-word, since nothing else fits.
-pub(crate) fn wrap_text(s: &str, w: usize) -> Vec<String> {
-    let w = w.max(1);
-    let mut lines = Vec::new();
-    let mut cur = String::new();
-    let mut col = 0usize;
-    for (unit, uw) in break_units(s) {
-        if col + uw > w && col > 0 {
-            lines.push(std::mem::take(&mut cur));
-            col = 0;
-            if unit == " " {
-                continue;
-            }
-        }
-        for c in unit.chars() {
-            let cw = char_cells(c).max(1);
-            if col + cw > w && col > 0 {
-                lines.push(std::mem::take(&mut cur));
-                col = 0;
-            }
-            cur.push(c);
-            col += cw;
-        }
-    }
-    if !cur.is_empty() || lines.is_empty() {
-        lines.push(cur);
-    }
-    lines
-}
-
-// A space, one wide character, or one run of narrow characters: the units a line may
-// break between.
-pub(crate) fn break_units(s: &str) -> Vec<(String, usize)> {
-    let mut out = Vec::new();
-    let mut word = String::new();
-    let flush = |word: &mut String, out: &mut Vec<(String, usize)>| {
-        if !word.is_empty() {
-            let w = cell_width(word);
-            out.push((std::mem::take(word), w));
-        }
-    };
-    for c in s.chars() {
-        if c == ' ' || char_cells(c) >= 2 {
-            flush(&mut word, &mut out);
-            out.push((c.to_string(), char_cells(c).max(1)));
-        } else {
-            word.push(c);
-        }
-    }
-    flush(&mut word, &mut out);
-    out
 }
 
 // A horizontal box rule: a left corner, `w` dashes, a right corner.

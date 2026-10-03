@@ -1,5 +1,3 @@
-use std::path::PathBuf;
-
 #[derive(Debug)]
 pub struct Deck {
     pub meta: Meta,
@@ -88,7 +86,6 @@ pub(crate) fn guides(c: char) -> bool {
     c.is_whitespace() || draws(c)
 }
 
-
 // One stretch of an art block. A nested command keeps the leading whitespace and vertical
 // guides of the line it sat on, and every line it renders carries them.
 #[derive(Debug, Clone)]
@@ -132,10 +129,17 @@ pub struct TreeNode {
 pub enum Inline {
     Text(String, Style),
     Code(String),
-    Link { label: String, url: String },
+    Link {
+        label: String,
+        url: String,
+    },
     // `display` lifts a lone fragment to its own block: set for `◊typst{}` and
     // `$$…$$`, cleared for inline `$…$`.
-    InlineTypst { src: String, width: Width, display: bool },
+    InlineTypst {
+        src: String,
+        width: Width,
+        display: bool,
+    },
     // A structured ◊ command (tree/grid/figure/details) restored mid-stream; the
     // paragraph fold lifts a lone one to its block. Never reaches inline rendering.
     BlockFragment(Box<Block>),
@@ -164,32 +168,4 @@ pub struct Style {
     pub dim: bool,
     pub code: bool,
     pub quote: bool,
-}
-
-#[derive(Debug, Clone)]
-pub enum RenderOp {
-    MoveTo(u16, u16),
-    Text(String, Style),
-    LineBreak,
-    Image {
-        png_path: PathBuf,
-        cols: u16,
-        rows: u16,
-    },
-    // One placeholder line of a virtual placement `rows` tall: `row` selects the
-    // slice. A table cell emits one op per line so borders stay in the text grid.
-    InlineImage {
-        png_path: PathBuf,
-        cols: u16,
-        rows: u16,
-        row: u16,
-    },
-    Link {
-        label: String,
-        url: String,
-        style: Style,
-    },
-    // Zero-width: the row it lands on toggles details box `id` when clicked.
-    ToggleTarget(usize),
-    ClearImages,
 }

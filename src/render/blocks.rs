@@ -1,10 +1,14 @@
+use crate::assets::Assets;
 use std::collections::HashSet;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
-use crate::core::ir::{draws, ArtLine, ArtPart, Align, Block, Inline, RenderOp, Style, Width};
+use super::commands;
+use crate::core::ir::{draws, Align, ArtLine, ArtPart, Block, Inline, Style, Width};
+use crate::layout::RenderOp;
 use crate::layout::{natural_ppi, TermInfo};
-use crate::commands;
-use crate::render::inline::{disp_width, emit_inlines, flat_text, uppercase_inlines};
+use crate::render::inline::{
+    emit_inlines, emit_tokens, flat_text, inline_tokens, tokens_width, uppercase_inlines,
+};
 use crate::render::paint::{
     caption_style, cell_width, code_style, heading_style, hrule, image_cells, indent_op, pad,
     place_image, quote_style, wrap_text,
@@ -28,7 +32,7 @@ impl Toggles<'_> {
 pub(crate) fn emit_block(
     block: &Block,
     term: &TermInfo,
-    deck_dir: &Path,
+    assets: &Assets,
     indent: usize,
     tg: &mut Toggles,
     ops: &mut Vec<RenderOp>,
@@ -42,8 +46,9 @@ pub(crate) fn emit_block(
             };
             if *level == 1 {
                 let avail = (term.cols as usize).saturating_sub(indent);
-                let eff = indent + avail.saturating_sub(disp_width(&owned)) / 2;
-                emit_inlines(&owned, heading_style(), term, deck_dir, eff, eff, ops);
+                let tokens = inline_tokens(&owned, heading_style(), term, assets);
+                let eff = indent + avail.saturating_sub(tokens_width(&tokens)) / 2;
+                emit_tokens(&tokens, term.cols as usize, eff, eff, ops);
             } else {
                 // accent bar by level: ┃ for section titles, │ for subsections
                 let accent = if *level == 2 {
@@ -58,27 +63,25 @@ pub(crate) fn emit_block(
                     hinls.push(Inline::Text(accent.to_string(), heading_style()));
                 }
                 hinls.extend(owned);
-                emit_inlines(&hinls, heading_style(), term, deck_dir, indent, indent, ops);
+                emit_inlines(&hinls, heading_style(), term, assets, indent, indent, ops);
             }
             ops.push(RenderOp::LineBreak);
         }
         Block::Paragraph(inls) => {
-            emit_inlines(inls, Style::default(), term, deck_dir, indent, indent, ops);
+            emit_inlines(inls, Style::default(), term, assets, indent, indent, ops);
             ops.push(RenderOp::LineBreak);
         }
         Block::List { ordered, items } => {
-            emit_list(*ordered, items, "", term, deck_dir, indent, tg, ops);
+            emit_list(*ordered, items, "", term, assets, indent, tg, ops);
         }
         Block::Code { src, lang } => emit_code(src, lang.as_deref(), term, indent, ops),
-        Block::Art { parts, caption } => {
-            emit_art(parts, caption, term, deck_dir, indent, tg, ops)
-        }
+        Block::Art { parts, caption } => emit_art(parts, caption, term, assets, indent, tg, ops),
         Block::BlockTypst { src, width } => {
-            commands::typst::render_block(src, *width, term, deck_dir, indent, ops)
+            commands::typst::render_block(src, *width, term, assets, indent, ops)
         }
         Block::Image { src, alt } => {
-            if let Some(png_path) = image_file(src, deck_dir) {
-                place_image(ops, png_path, term, indent, Width::Natural);
+            if let Some(png_path) = assets.image(src) {
+                place_image(ops, png_path, assets, term, indent, Width::Natural);
                 if !alt.is_empty() {
                     let content_w = (term.cols as usize).saturating_sub(indent);
                     ops.push(indent_op(indent));
@@ -103,27 +106,17 @@ pub(crate) fn emit_block(
             ops.push(RenderOp::LineBreak);
         }
         Block::Table { aligns, head, rows } => {
-            emit_table(aligns, head, rows, term, deck_dir, indent, ops);
+            emit_table(aligns, head, rows, term, assets, indent, ops);
         }
-        Block::Quote(inner) => emit_quote(inner, term, deck_dir, indent, tg, ops),
+        Block::Quote(inner) => emit_quote(inner, term, assets, indent, tg, ops),
         Block::Tree(nodes) => commands::tree::render(nodes, indent, ops),
         Block::Grid(cells) => commands::grid::render(cells, term, indent, ops),
         Block::Details { summary, body } => {
             let id = tg.take_id();
             let open = tg.open.contains(&id);
-            commands::details::render(id, open, summary, body, term, deck_dir, indent, ops);
+            commands::details::render(id, open, summary, body, term, assets, indent, ops);
         }
     }
-}
-
-// The PNG behind an image block. A local source is a path beside the deck; a remote one is
-// downloaded into the cache, and the alt text stands in until it lands.
-fn image_file(src: &str, deck_dir: &Path) -> Option<PathBuf> {
-    if crate::cache::is_remote(src) {
-        return crate::cache::remote_image(src);
-    }
-    let path = deck_dir.join(src);
-    path.exists().then_some(path)
 }
 
 fn code_label_style() -> Style {
@@ -166,7 +159,7 @@ fn emit_art(
     parts: &[ArtPart],
     caption: &[Inline],
     term: &TermInfo,
-    deck_dir: &Path,
+    assets: &Assets,
     indent: usize,
     tg: &mut Toggles,
     ops: &mut Vec<RenderOp>,
@@ -177,7 +170,7 @@ fn emit_art(
         match part {
             ArtPart::Lines(lines) => {
                 for l in lines {
-                    let rows = art_rows(l, width, term, deck_dir);
+                    let rows = art_rows(l, width, term, assets);
                     let cont = continue_guides(&l.guide);
                     prefix_rows(&pre, &l.guide, &cont, rows, ops);
                 }
@@ -185,7 +178,7 @@ fn emit_art(
             ArtPart::Nested { guide, block } => {
                 let inner = term.with_cols(width.saturating_sub(cell_width(guide)));
                 let mut sub = Vec::new();
-                emit_block(block, &inner, deck_dir, 0, tg, &mut sub);
+                emit_block(block, &inner, assets, 0, tg, &mut sub);
                 prefix_rows(&pre, guide, guide, split_lines(sub), ops);
             }
         }
@@ -195,33 +188,26 @@ fn emit_art(
             guide: String::new(),
             inls: caption.to_vec(),
         };
-        let rows = art_rows(&line, width, term, deck_dir);
+        let rows = art_rows(&line, width, term, assets);
         prefix_rows(&pre, "", "", rows, ops);
     }
 }
 
-// The visual rows of one art line. Laid out unwrapped first: a line that fits is drawn as
+// The visual rows of one art line. A line that fits is drawn as
 // written, and so is one that draws (a box side, an arrow), since reflowing it breaks the art.
-// Prose past the column is laid out again against what the guides leave.
-fn art_rows(
-    line: &ArtLine,
-    width: usize,
-    term: &TermInfo,
-    deck_dir: &Path,
-) -> Vec<Vec<RenderOp>> {
-    let lay = |cols: usize| {
-        let mut sub = Vec::new();
-        let inner = term.with_cols(cols);
-        emit_inlines(&line.inls, Style::default(), &inner, deck_dir, 0, 0, &mut sub);
-        split_lines(sub)
+// Prose wraps against the width available after its guides.
+fn art_rows(line: &ArtLine, width: usize, term: &TermInfo, assets: &Assets) -> Vec<Vec<RenderOp>> {
+    let tokens = inline_tokens(&line.inls, Style::default(), term, assets);
+    let available = width.saturating_sub(cell_width(&line.guide)).max(1);
+    let columns = if tokens_width(&tokens) <= available || flat_text(&line.inls).chars().any(draws)
+    {
+        usize::MAX
+    } else {
+        available
     };
-    let gw = cell_width(&line.guide);
-    let rows = lay(usize::from(u16::MAX));
-    let w = gw + rows.iter().map(|r| line_width(r)).max().unwrap_or(0);
-    if w <= width || flat_text(&line.inls).chars().any(draws) {
-        return rows;
-    }
-    lay(width.saturating_sub(gw).max(1))
+    let mut ops = Vec::new();
+    emit_tokens(&tokens, columns, 0, 0, &mut ops);
+    split_lines(ops)
 }
 
 // Draw rows at the figure's margin: `first` leads the first row, `rest` the ones it continues
@@ -251,7 +237,13 @@ fn prefix_rows(
 fn continue_guides(guide: &str) -> String {
     guide
         .chars()
-        .map(|c| if matches!(c, '│' | '├' | '┌' | '┬' | '┼') { '│' } else { ' ' })
+        .map(|c| {
+            if matches!(c, '│' | '├' | '┌' | '┬' | '┼') {
+                '│'
+            } else {
+                ' '
+            }
+        })
         .collect()
 }
 
@@ -327,7 +319,7 @@ pub(crate) fn emit_box(
 fn emit_quote(
     inner: &[Block],
     term: &TermInfo,
-    deck_dir: &Path,
+    assets: &Assets,
     indent: usize,
     tg: &mut Toggles,
     ops: &mut Vec<RenderOp>,
@@ -336,7 +328,7 @@ fn emit_quote(
     let inner_term = term.with_cols(text_w);
     let mut sub = Vec::new();
     for b in inner {
-        emit_block(b, &inner_term, deck_dir, 0, tg, &mut sub);
+        emit_block(b, &inner_term, assets, 0, tg, &mut sub);
     }
     let deco = BoxDeco::shaded(text_w, quote_style());
     emit_box(split_lines(sub), text_w, indent, &deco, ops);
@@ -363,7 +355,7 @@ pub(crate) fn line_width(line: &[RenderOp]) -> usize {
     line.iter()
         .map(|op| match op {
             RenderOp::Text(t, _) => cell_width(t),
-            RenderOp::InlineImage { cols, .. } => *cols as usize,
+            RenderOp::ImageRow { cols, .. } => *cols as usize,
             RenderOp::Link { label, .. } => cell_width(label),
             _ => 0,
         })
@@ -373,11 +365,20 @@ pub(crate) fn line_width(line: &[RenderOp]) -> usize {
 // Add the box background to a text or link op; other ops pass through unstyled.
 fn shade(op: RenderOp, bg: Style) -> RenderOp {
     match op {
-        RenderOp::Text(t, s) => RenderOp::Text(t, Style { quote: bg.quote, ..s }),
+        RenderOp::Text(t, s) => RenderOp::Text(
+            t,
+            Style {
+                quote: bg.quote,
+                ..s
+            },
+        ),
         RenderOp::Link { label, url, style } => RenderOp::Link {
             label,
             url,
-            style: Style { quote: bg.quote, ..style },
+            style: Style {
+                quote: bg.quote,
+                ..style
+            },
         },
         other => other,
     }
@@ -389,7 +390,7 @@ fn emit_list(
     items: &[Vec<Block>],
     prefix: &str,
     term: &TermInfo,
-    deck_dir: &Path,
+    assets: &Assets,
     indent: usize,
     tg: &mut Toggles,
     ops: &mut Vec<RenderOp>,
@@ -414,13 +415,13 @@ fn emit_list(
             match b {
                 Block::Paragraph(inls) => {
                     let lead = if j == 0 { 0 } else { cont };
-                    emit_inlines(inls, Style::default(), term, deck_dir, lead, cont, ops);
+                    emit_inlines(inls, Style::default(), term, assets, lead, cont, ops);
                     ops.push(RenderOp::LineBreak);
                 }
                 Block::List { ordered: o, items } => {
-                    emit_list(*o, items, &item_prefix, term, deck_dir, cont, tg, ops);
+                    emit_list(*o, items, &item_prefix, term, assets, cont, tg, ops);
                 }
-                nested => emit_block(nested, term, deck_dir, cont, tg, ops),
+                nested => emit_block(nested, term, assets, cont, tg, ops),
             }
         }
     }
@@ -442,13 +443,13 @@ struct Fig {
 }
 
 // Render the first typst fragment in the cell and size it against `avail` columns.
-fn cell_fig(inls: &[Inline], term: &TermInfo, deck_dir: &Path, avail: usize) -> Option<Fig> {
+fn cell_fig(inls: &[Inline], term: &TermInfo, assets: &Assets, avail: usize) -> Option<Fig> {
     let (src, width) = inls.iter().find_map(|i| match i {
         Inline::InlineTypst { src, width, .. } => Some((src, *width)),
         _ => None,
     })?;
-    let png = commands::typst::render_fragment(src, deck_dir, natural_ppi(term), true).ok()?;
-    let (cols, rows) = image_cells(&png, &term.with_cols(avail), 0, width);
+    let png = assets.fragment(src, natural_ppi(term), true).ok()?;
+    let (cols, rows) = image_cells(assets.dimensions(&png), &term.with_cols(avail), 0, width);
     Some(Fig {
         png,
         width,
@@ -462,7 +463,7 @@ fn emit_table(
     head: &[Vec<Inline>],
     rows: &[Vec<Vec<Inline>>],
     term: &TermInfo,
-    deck_dir: &Path,
+    assets: &Assets,
     indent: usize,
     ops: &mut Vec<RenderOp>,
 ) {
@@ -479,7 +480,7 @@ fn emit_table(
         };
         Cell {
             text: flat_text(inls),
-            fig: cell_fig(inls, term, deck_dir, content_w),
+            fig: cell_fig(inls, term, assets, content_w),
         }
     };
     let mut head_cells: Vec<Cell> = (0..ncol).map(|c| build(head.get(c))).collect();
@@ -488,38 +489,63 @@ fn emit_table(
         .map(|row| (0..ncol).map(|c| build(row.get(c))).collect())
         .collect();
 
+    if content_w < 1 + 4 * ncol {
+        for (index, row) in std::iter::once(&head_cells).chain(&body_cells).enumerate() {
+            if index == 0 && head.iter().all(Vec::is_empty) {
+                continue;
+            }
+            let style = if index == 0 {
+                heading_style()
+            } else {
+                Style::default()
+            };
+            for cell in row {
+                if let Some(fig) = &cell.fig {
+                    place_image(ops, fig.png.clone(), assets, term, indent, fig.width);
+                }
+                for line in wrap_text(&cell.text, content_w) {
+                    ops.push(indent_op(indent));
+                    ops.push(RenderOp::Text(line, style));
+                    ops.push(RenderOp::LineBreak);
+                }
+            }
+            ops.push(RenderOp::LineBreak);
+        }
+        return;
+    }
+
     // A column is as wide as its widest text, or its widest figure.
     let mut widths = vec![0usize; ncol];
     for c in 0..ncol {
-        let mut w = disp_width(head.get(c).map(Vec::as_slice).unwrap_or(&[]));
+        let mut w = cell_width(&head_cells[c].text);
         w = w.max(head_cells[c].fig.as_ref().map_or(0, |f| f.cols as usize));
-        for (r, row) in rows.iter().enumerate() {
-            w = w.max(disp_width(row.get(c).map(Vec::as_slice).unwrap_or(&[])));
-            w = w.max(body_cells[r][c].fig.as_ref().map_or(0, |f| f.cols as usize));
+        for row in &body_cells {
+            w = w.max(cell_width(&row[c].text));
+            w = w.max(row[c].fig.as_ref().map_or(0, |f| f.cols as usize));
         }
         widths[c] = w;
     }
 
     // Fit within the terminal: each column costs its width plus a ` … │` of 3, and
-    // the table opens with one `│`. Shave the widest column until the row fits, then
+    // the table opens with one `│`. Cap the widest columns so that the row fits, then
     // cells wrap into their capped width instead of overrunning the right edge.
     let budget = (term.cols as usize)
         .saturating_sub(indent + 1 + 3 * ncol)
         .max(ncol);
-    while widths.iter().sum::<usize>() > budget {
-        let widest = (0..ncol).max_by_key(|&c| widths[c]).unwrap();
-        if widths[widest] <= 1 {
-            break;
-        }
-        widths[widest] -= 1;
-    }
+    fit_widths(&mut widths, budget);
 
     // Re-fit each figure to the column it ended up with.
     for c in 0..ncol {
-        for cell in std::iter::once(&mut head_cells[c]).chain(body_cells.iter_mut().map(|r| &mut r[c]))
+        for cell in
+            std::iter::once(&mut head_cells[c]).chain(body_cells.iter_mut().map(|r| &mut r[c]))
         {
             if let Some(f) = cell.fig.as_mut() {
-                let (cols, rows) = image_cells(&f.png, &term.with_cols(widths[c]), 0, f.width);
+                let (cols, rows) = image_cells(
+                    assets.dimensions(&f.png),
+                    &term.with_cols(widths[c]),
+                    0,
+                    f.width,
+                );
                 f.cols = cols;
                 f.rows = rows;
             }
@@ -561,7 +587,7 @@ fn emit_table(
                     let slack = widths[c].saturating_sub(f.cols as usize);
                     let left = slack / 2;
                     ops.push(RenderOp::Text(" ".repeat(left), style));
-                    ops.push(RenderOp::InlineImage {
+                    ops.push(RenderOp::ImageRow {
                         png_path: f.png.clone(),
                         cols: f.cols,
                         rows: f.rows,
@@ -569,8 +595,14 @@ fn emit_table(
                     });
                     ops.push(RenderOp::Text(" ".repeat(slack - left + 1), style));
                 } else {
-                    let seg = wrapped[c].get(r - fig_rows(c)).map(String::as_str).unwrap_or("");
-                    ops.push(RenderOp::Text(format!("{} ", pad(seg, widths[c], align_of(c))), style));
+                    let seg = wrapped[c]
+                        .get(r - fig_rows(c))
+                        .map(String::as_str)
+                        .unwrap_or("");
+                    ops.push(RenderOp::Text(
+                        format!("{} ", pad(seg, widths[c], align_of(c))),
+                        style,
+                    ));
                 }
             }
             ops.push(RenderOp::Text("│".to_string(), Style::default()));
@@ -606,3 +638,84 @@ fn emit_table(
     push_line(border('└', '┴', '┘'), ops);
 }
 
+fn fit_widths(widths: &mut [usize], budget: usize) {
+    if widths.iter().sum::<usize>() <= budget {
+        return;
+    }
+    let (mut low, mut high) = (0, widths.iter().copied().max().unwrap_or(0));
+    while low < high {
+        let cap = low + (high - low).div_ceil(2);
+        if widths.iter().map(|width| (*width).min(cap)).sum::<usize>() <= budget {
+            low = cap;
+        } else {
+            high = cap - 1;
+        }
+    }
+    let mut spare = budget - widths.iter().map(|width| (*width).min(low)).sum::<usize>();
+    for width in widths {
+        if *width > low {
+            *width = low;
+            if spare > 0 {
+                *width += 1;
+                spare -= 1;
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn narrow_tables_keep_all_text_within_the_terminal() {
+        let head = vec![vec![Inline::Text("head".into(), Style::default())]; 3];
+        let rows = vec![vec![
+            vec![Inline::Text(
+                "abcdefgh中文".into(),
+                Style::default()
+            )];
+            3
+        ]];
+        let assets = Assets::new(std::path::Path::new("."));
+        for cols in 1..20 {
+            let term = TermInfo {
+                cols,
+                rows: 30,
+                cell_w_px: 8,
+                cell_h_px: 16,
+            };
+            let mut ops = Vec::new();
+            emit_table(&[], &head, &rows, &term, &assets, 0, &mut ops);
+            assert!(
+                split_lines(ops)
+                    .iter()
+                    .all(|line| line_width(line) <= cols as usize),
+                "columns={cols}"
+            );
+        }
+    }
+
+    #[test]
+    fn table_widths_preserve_existing_distribution() {
+        for a in 0..8 {
+            for b in 0..8 {
+                for c in 0..8 {
+                    for budget in 3..24 {
+                        let mut expected = vec![a, b, c];
+                        while expected.iter().sum::<usize>() > budget {
+                            let widest = (0..3).max_by_key(|&i| expected[i]).unwrap();
+                            if expected[widest] <= 1 {
+                                break;
+                            }
+                            expected[widest] -= 1;
+                        }
+                        let mut actual = vec![a, b, c];
+                        fit_widths(&mut actual, budget);
+                        assert_eq!(actual, expected, "widths={a},{b},{c}; budget={budget}");
+                    }
+                }
+            }
+        }
+    }
+}
