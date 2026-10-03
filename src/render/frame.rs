@@ -47,60 +47,83 @@ pub fn compose(body: &Body, term: &TermInfo, meta: &Meta, view: &View) -> Frame 
 
 fn status_bar(term: &TermInfo, idx: usize, total: usize, meta: &Meta) -> (Vec<RenderOp>, Hit) {
     let (margin, content_w) = layout(term);
-    let rows = term.rows as usize;
-    let mx = margin as u16;
-    let row = rows.saturating_sub(1) as u16;
-    let dim = dim_style();
-    let bold = heading_style();
-    let mut ops = vec![
-        RenderOp::MoveTo(mx, rows.saturating_sub(2) as u16),
-        RenderOp::Text("─".repeat(content_w), dim),
-        RenderOp::MoveTo(mx, row),
-    ];
-    let button = "⌂ Contents";
+    let content_w = content_w.min(term.cols as usize);
+    let x = margin as u16;
+    let row = term.rows.saturating_sub(1);
+    let right = truncate(&format!("{} / {}", idx + 1, total), content_w);
+    let left_w = content_w.saturating_sub(cell_width(&right) + 1);
+    let button = truncate("⌂ Contents", left_w);
     let meta_text = match (&meta.title, &meta.author) {
-        (Some(t), Some(a)) => format!("   {t} — {a}"),
-        (Some(t), None) => format!("   {t}"),
-        (None, Some(a)) => format!("   {a}"),
+        (Some(title), Some(author)) => format!("   {title} / {author}"),
+        (Some(title), None) => format!("   {title}"),
+        (None, Some(author)) => format!("   {author}"),
         _ => String::new(),
     };
-    let hint = "? help";
-    let right = format!("{} / {}", idx + 1, total);
-    let used =
-        cell_width(button) + cell_width(&meta_text) + cell_width(hint) + cell_width(&right) + 4;
-    let gap = content_w.saturating_sub(used).max(1);
-    ops.push(RenderOp::Text(button.to_string(), bold));
-    ops.push(RenderOp::Text(meta_text, dim));
-    ops.push(RenderOp::Text(" ".repeat(gap), Style::default()));
-    ops.push(RenderOp::Text(format!("{hint}    "), dim));
-    ops.push(RenderOp::Text(right, bold));
+    let rest = left_w.saturating_sub(cell_width(&button));
+    let hint = if rest >= 9 { "   ? help" } else { "" };
+    let meta_text = truncate(&meta_text, rest.saturating_sub(cell_width(hint)));
+    let used = cell_width(&button) + cell_width(&meta_text) + cell_width(hint) + cell_width(&right);
+    let ops = vec![
+        RenderOp::MoveTo(x, term.rows.saturating_sub(2)),
+        RenderOp::Text("─".repeat(content_w), dim_style()),
+        RenderOp::MoveTo(x, row),
+        RenderOp::Text(button.clone(), heading_style()),
+        RenderOp::Text(meta_text, dim_style()),
+        RenderOp::Text(hint.to_string(), dim_style()),
+        RenderOp::Text(" ".repeat(content_w.saturating_sub(used)), Style::default()),
+        RenderOp::Text(right, heading_style()),
+    ];
     let hit = Hit {
         row,
-        cols: mx..mx + cell_width(button) as u16,
+        cols: x..x + cell_width(&button) as u16,
         action: HitAction::Goto(0),
     };
     (ops, hit)
 }
 
-// A centered, bordered box; each line carries its own style.
 fn centered_box(term: &TermInfo, lines: &[(String, Style)]) -> Vec<RenderOp> {
-    let w = lines.iter().map(|(l, _)| cell_width(l)).max().unwrap_or(0);
     let cols = term.cols as usize;
     let rows = term.rows as usize;
-    let x = (cols.saturating_sub(w + 4) / 2) as u16;
-    let y0 = rows.saturating_sub(lines.len() + 2) / 2;
+    if cols == 0 || rows == 0 {
+        return Vec::new();
+    }
+    if cols < 5 || rows < 3 {
+        return lines
+            .iter()
+            .take(rows)
+            .enumerate()
+            .flat_map(|(row, (line, style))| {
+                [
+                    RenderOp::MoveTo(0, row as u16),
+                    RenderOp::Text(truncate(line, cols), *style),
+                ]
+            })
+            .collect();
+    }
+    let lines = &lines[..lines.len().min(rows - 2)];
+    let width = lines
+        .iter()
+        .map(|(line, _)| cell_width(line))
+        .max()
+        .unwrap_or(0)
+        .min(cols - 4);
+    let x = ((cols - width - 4) / 2) as u16;
+    let y = (rows - lines.len() - 2) / 2;
     let mut ops = vec![
-        RenderOp::MoveTo(x, y0 as u16),
-        RenderOp::Text(hrule('┌', w + 2, '┐'), Style::default()),
+        RenderOp::MoveTo(x, y as u16),
+        RenderOp::Text(hrule('┌', width + 2, '┐'), Style::default()),
     ];
-    for (i, (l, style)) in lines.iter().enumerate() {
-        ops.push(RenderOp::MoveTo(x, (y0 + 1 + i) as u16));
+    for (i, (line, style)) in lines.iter().enumerate() {
+        ops.push(RenderOp::MoveTo(x, (y + 1 + i) as u16));
         ops.push(RenderOp::Text("│ ".to_string(), Style::default()));
-        ops.push(RenderOp::Text(pad(l, w, Align::Left), *style));
+        ops.push(RenderOp::Text(
+            pad(&truncate(line, width), width, Align::Left),
+            *style,
+        ));
         ops.push(RenderOp::Text(" │".to_string(), Style::default()));
     }
-    ops.push(RenderOp::MoveTo(x, (y0 + 1 + lines.len()) as u16));
-    ops.push(RenderOp::Text(hrule('└', w + 2, '┘'), Style::default()));
+    ops.push(RenderOp::MoveTo(x, (y + 1 + lines.len()) as u16));
+    ops.push(RenderOp::Text(hrule('└', width + 2, '┘'), Style::default()));
     ops
 }
 
@@ -197,4 +220,82 @@ fn scrollbar(term: &TermInfo, scroll: usize, vp: usize, height: usize) -> Vec<Re
         ops.push(RenderOp::Text(ch.to_string(), style));
     }
     ops
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::layout::ops::positions;
+
+    #[test]
+    fn screen_controls_fit_small_terminals() {
+        let meta = Meta {
+            title: Some("中文标题".repeat(30)),
+            author: Some("author".repeat(30)),
+        };
+        for cols in 1..100 {
+            for rows in 1..20 {
+                let term = TermInfo {
+                    cols,
+                    rows,
+                    cell_w_px: 8,
+                    cell_h_px: 16,
+                };
+                let frame = compose(
+                    &Body::default(),
+                    &term,
+                    &meta,
+                    &View {
+                        help: true,
+                        total: 100,
+                        ..View::default()
+                    },
+                );
+                for (row, col, op) in positions(&frame.ops) {
+                    if let RenderOp::Text(text, _) = op {
+                        assert!(row < rows);
+                        assert!(
+                            usize::from(col) + cell_width(text) <= usize::from(cols),
+                            "cols={cols} text={text:?}"
+                        );
+                    }
+                }
+                assert!(frame.hits.is_empty());
+            }
+        }
+    }
+
+    #[test]
+    fn composition_returns_the_effective_scroll_offset() {
+        let term = TermInfo {
+            cols: 80,
+            rows: 24,
+            cell_w_px: 8,
+            cell_h_px: 16,
+        };
+        let body = Body {
+            rows: vec![Vec::new(); 25],
+            hits: Vec::new(),
+        };
+        let frame = compose(
+            &body,
+            &term,
+            &Meta::default(),
+            &View {
+                scroll: 100,
+                ..View::default()
+            },
+        );
+        assert_eq!(frame.scroll, 4);
+        let frame = compose(
+            &Body::default(),
+            &term,
+            &Meta::default(),
+            &View {
+                scroll: 4,
+                ..View::default()
+            },
+        );
+        assert_eq!(frame.scroll, 0);
+    }
 }

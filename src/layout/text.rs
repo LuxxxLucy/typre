@@ -34,13 +34,15 @@ pub(crate) fn split_word(s: &str, width: usize) -> Vec<&str> {
     let mut start = 0;
     for (offset, grapheme) in s.grapheme_indices(true) {
         let end = offset + grapheme.len();
-        if offset > start && cell_width(&s[start..end]) > width {
-            out.push(&s[start..offset]);
-            start = offset;
-        }
         if cell_width(&s[start..end]) > width {
-            out.push("…");
-            start = end;
+            if offset > start {
+                out.push(&s[start..offset]);
+                start = offset;
+            }
+            if cell_width(grapheme) > width {
+                out.push("…");
+                start = end;
+            }
         }
     }
     if start < s.len() {
