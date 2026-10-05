@@ -64,3 +64,24 @@ For scripting and tests, without an interactive terminal:
 
 - `typre --dump-ops <deck>` prints the parsed slides and the render operations.
 - `typre --export <deck> [-o FILE]` runs the full pipeline, including typst rasterization, and writes the terminal byte stream.
+
+## Library structure
+
+The library separates document meaning, asset preparation, layout, and terminal output.
+
+| Module | Responsibility |
+| --- | --- |
+| `core` | Parse Markdown and commands into document types. |
+| `assets` | Prepare images and formulas; own dependencies and cached results. |
+| `layout` | Measure text; store drawing rows and interaction targets. |
+| `render` | Compose document blocks, slide templates, and visible frames. |
+| `term` | Encode drawing operations; own terminal images and session cleanup. |
+| `app` | Handle input, navigation, file changes, and redraw decisions. |
+
+Command parsers depend only on document types.
+Feature renderers share text, row, and box operations.
+Scrolling selects rows from the current layout.
+File changes invalidate prepared assets; successful downloads refresh the current layout.
+
+The library documentation contains a complete rendering example.
+Run `cargo test` for parser, layout, asset, and terminal-output checks.
