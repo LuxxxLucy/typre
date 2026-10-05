@@ -8,6 +8,21 @@ pub(crate) fn cell_width(s: &str) -> usize {
 pub(crate) fn break_units(s: &str) -> Vec<(&str, usize)> {
     let mut out = Vec::new();
     let mut start = 0;
+    if s.is_ascii() {
+        for (offset, byte) in s.bytes().enumerate() {
+            if byte == b' ' {
+                if start < offset {
+                    out.push((&s[start..offset], cell_width(&s[start..offset])));
+                }
+                out.push((&s[offset..offset + 1], 1));
+                start = offset + 1;
+            }
+        }
+        if start < s.len() {
+            out.push((&s[start..], cell_width(&s[start..])));
+        }
+        return out;
+    }
     for (offset, grapheme) in s.grapheme_indices(true) {
         let width = cell_width(grapheme);
         if grapheme == " " || width >= 2 {
@@ -29,6 +44,12 @@ pub(crate) fn split_word(s: &str, width: usize) -> Vec<&str> {
     let width = width.max(1);
     if cell_width(s) <= width {
         return vec![s];
+    }
+    if s.bytes().all(|byte| (b' '..=b'~').contains(&byte)) {
+        return (0..s.len())
+            .step_by(width)
+            .map(|start| &s[start..(start + width).min(s.len())])
+            .collect();
     }
     let mut out = Vec::new();
     let mut start = 0;

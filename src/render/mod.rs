@@ -27,7 +27,7 @@ pub fn body(slide: &Slide, term: &TermInfo, assets: &Assets, open: &HashSet<usiz
 pub fn render(slide: &Slide, term: &TermInfo, assets: &Assets) -> Vec<RenderOp> {
     let body = body(slide, term, assets, &HashSet::new());
     let mut ops = vec![RenderOp::ClearImages, RenderOp::MoveTo(0, 0)];
-    ops.extend(body.window(0, body.height()).0);
+    ops.extend(body.into_ops());
     ops
 }
 

@@ -8,6 +8,16 @@ pub struct Body {
 }
 
 impl Body {
+    pub fn into_ops(self) -> Vec<RenderOp> {
+        let capacity = self.rows.iter().map(|row| row.len() + 1).sum();
+        let mut ops = Vec::with_capacity(capacity);
+        for row in self.rows {
+            ops.extend(row);
+            ops.push(RenderOp::LineBreak);
+        }
+        ops
+    }
+
     pub fn height(&self) -> usize {
         self.rows.len()
     }
