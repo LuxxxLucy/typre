@@ -1,14 +1,14 @@
 use crate::core::ir::Block;
 use crate::core::parse::art_inlines;
 
-use super::{bracket_cmd, Frag};
+use super::{parse_command_with_argument, ParsedCommand};
 
-pub(crate) fn parse(after: &str) -> Option<(Frag, usize)> {
-    let (summary, body, used) = bracket_cmd(after, "details")?;
-    Some((Frag::Block(build(&summary, &body)), used))
+pub(crate) fn parse(command_text: &str) -> Option<(ParsedCommand, usize)> {
+    let (summary, body, used) = parse_command_with_argument(command_text, "details")?;
+    Some((ParsedCommand::Block(parse_details(&summary, &body)), used))
 }
 
-fn build(summary: &str, body: &str) -> Block {
+fn parse_details(summary: &str, body: &str) -> Block {
     Block::Details {
         summary: art_inlines(summary),
         body: body.trim_matches('\n').lines().map(art_inlines).collect(),

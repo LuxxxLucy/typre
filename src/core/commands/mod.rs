@@ -1,4 +1,3 @@
-// Parse the shared ◊name[arg]{body} envelope and dispatch its body.
 use crate::core::ir::{Block, Width};
 
 pub mod details;
@@ -8,53 +7,46 @@ pub mod tree;
 pub mod typst;
 pub mod width;
 
-// A ◊ command pulled out before markdown parsing: `typst`/`width` restore inline
-// (or as block math when alone), the rest restore as their structured block.
-pub(crate) enum Frag {
+pub(crate) enum ParsedCommand {
     Inline { src: String, width: Width },
     Block(Block),
 }
 
-// Parse one ◊ command at the start of `after` (just past the ◊). Each command
-// matches its own name and returns its fragment and the bytes consumed through
-// the closing `}`.
-pub(crate) fn parse_command(after: &str) -> Option<(Frag, usize)> {
-    typst::parse(after)
-        .or_else(|| tree::parse(after))
-        .or_else(|| grid::parse(after))
-        .or_else(|| width::parse(after))
-        .or_else(|| figure::parse(after))
-        .or_else(|| details::parse(after))
+pub(crate) fn parse_command(command_text: &str) -> Option<(ParsedCommand, usize)> {
+    typst::parse(command_text)
+        .or_else(|| tree::parse(command_text))
+        .or_else(|| grid::parse(command_text))
+        .or_else(|| width::parse(command_text))
+        .or_else(|| figure::parse(command_text))
+        .or_else(|| details::parse(command_text))
 }
 
-// `◊name{body}`: return the body and the bytes consumed through the closing `}`.
-pub(crate) fn brace_cmd(after: &str, name: &str) -> Option<(String, usize)> {
-    let rest = after.strip_prefix(name)?.strip_prefix('{')?;
-    let (body, used) = balanced(rest, '{', '}')?;
+pub(crate) fn parse_braced_command(command_text: &str, name: &str) -> Option<(String, usize)> {
+    let rest = command_text.strip_prefix(name)?.strip_prefix('{')?;
+    let (body, used) = parse_balanced_body(rest, '{', '}')?;
     Some((body, name.len() + 1 + used))
 }
 
-// `◊name[arg]{body}`: return the arg, the body, and the bytes consumed through `}`.
-pub(crate) fn bracket_cmd(after: &str, name: &str) -> Option<(String, String, usize)> {
-    let rest = after.strip_prefix(name)?.strip_prefix('[')?;
-    // Balanced, so a markdown link in the argument keeps its own brackets.
-    let (arg, arg_used) = balanced(rest, '[', ']')?;
+pub(crate) fn parse_command_with_argument(
+    command_text: &str,
+    name: &str,
+) -> Option<(String, String, usize)> {
+    let rest = command_text.strip_prefix(name)?.strip_prefix('[')?;
+    let (arg, arg_used) = parse_balanced_body(rest, '[', ']')?;
     let rest = rest[arg_used..].strip_prefix('{')?;
-    let (body, used) = balanced(rest, '{', '}')?;
+    let (body, used) = parse_balanced_body(rest, '{', '}')?;
     Some((arg, body, name.len() + arg_used + 2 + used))
 }
 
-// `s` begins just after an opening `open`; return the body up to the matching `close` and the
-// byte count through it, counting nested pairs.
-fn balanced(s: &str, open: char, close: char) -> Option<(String, usize)> {
+fn parse_balanced_body(source: &str, open: char, close: char) -> Option<(String, usize)> {
     let mut depth = 1usize;
-    for (i, c) in s.char_indices() {
-        if c == open {
+    for (offset, character) in source.char_indices() {
+        if character == open {
             depth += 1;
-        } else if c == close {
+        } else if character == close {
             depth -= 1;
             if depth == 0 {
-                return Some((s[..i].to_string(), i + c.len_utf8()));
+                return Some((source[..offset].to_string(), offset + character.len_utf8()));
             }
         }
     }

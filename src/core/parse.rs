@@ -1,13 +1,13 @@
 use pulldown_cmark::{Alignment, CodeBlockKind, Event, HeadingLevel, Options, Parser, Tag, TagEnd};
 
-use super::commands::{parse_command, Frag};
+use super::commands::{parse_command, ParsedCommand};
 use crate::core::ir::{
     guides, plain_text, Align, ArtLine, ArtPart, Block, Deck, Inline, Meta, Slide, Style, TocEntry,
     Width,
 };
 
 pub fn parse(md: &str) -> Deck {
-    let (md, frags) = extract_typst(md);
+    let (md, commands) = extract_commands_from_markdown(md);
     let md = md.as_str();
     let opts = Options::ENABLE_TABLES
         | Options::ENABLE_STRIKETHROUGH
@@ -17,9 +17,7 @@ pub fn parse(md: &str) -> Deck {
     let mut meta = Meta::default();
     let mut slides: Vec<Slide> = vec![Slide::default()];
 
-    // Container stack: nested block sequences (slide root + list items).
     let mut block_stack: Vec<Vec<Block>> = vec![Vec::new()];
-    // Pending inline accumulator for the current leaf (heading/paragraph/item-paragraph).
     let mut inlines: Vec<Inline> = Vec::new();
     let mut style = Style::default();
     let mut list_ordered: Vec<bool> = Vec::new();
@@ -45,7 +43,6 @@ pub fn parse(md: &str) -> Deck {
 
             Event::Start(Tag::Heading { level, .. }) => {
                 let lvl = heading_to_u8(level);
-                // H1/H2 at the slide root begin a new slide (a normal markdown doc paginates by section)
                 if lvl <= 2 && block_stack.len() == 1 && !block_stack[0].is_empty() {
                     flush_slide(&mut slides, &mut block_stack);
                 }
@@ -68,7 +65,6 @@ pub fn parse(md: &str) -> Deck {
             }
 
             Event::Start(Tag::List(start)) => {
-                // Flush a tight item's own text before descending into its nested list.
                 flush_paragraph(&mut block_stack, &mut inlines);
                 list_ordered.push(start.is_some());
             }
@@ -77,7 +73,6 @@ pub fn parse(md: &str) -> Deck {
             }
             Event::Start(Tag::Item) => block_stack.push(Vec::new()),
             Event::End(TagEnd::Item) => {
-                // Flush accumulated inlines: tight items carry no Paragraph wrapper.
                 flush_paragraph(&mut block_stack, &mut inlines);
                 let item = block_stack.pop().unwrap();
                 let ordered = *list_ordered.last().unwrap_or(&false);
@@ -121,7 +116,6 @@ pub fn parse(md: &str) -> Deck {
             }
             Event::End(TagEnd::Image) => {
                 if let Some((src, alt)) = pending_image.take() {
-                    // Image is its own block; drop it from the paragraph inline stream.
                     push_block(&mut block_stack, Block::Image { src, alt });
                     inlines.clear();
                 }
@@ -190,7 +184,7 @@ pub fn parse(md: &str) -> Deck {
                 } else if let Some((_, label)) = in_link.as_mut() {
                     label.push_str(&t);
                 } else {
-                    push_text(&mut inlines, &t, style, &frags);
+                    push_text(&mut inlines, &t, style, &commands);
                 }
             }
             Event::Code(t) => inlines.push(Inline::Code(t.to_string())),
@@ -239,7 +233,7 @@ fn push_block(stack: &mut [Vec<Block>], block: Block) {
 }
 
 fn flush_paragraph(stack: &mut [Vec<Block>], inlines: &mut Vec<Inline>) {
-    fn flush_run(stack: &mut [Vec<Block>], run: &mut Vec<Inline>) {
+    fn flush_inline_run(stack: &mut [Vec<Block>], run: &mut Vec<Inline>) {
         if run.len() == 1 && matches!(run[0], Inline::InlineTypst { display: true, .. }) {
             if let Inline::InlineTypst { src, width, .. } = run.pop().unwrap() {
                 push_block(stack, Block::BlockTypst { src, width });
@@ -253,20 +247,20 @@ fn flush_paragraph(stack: &mut [Vec<Block>], inlines: &mut Vec<Inline>) {
         .iter()
         .any(|inline| matches!(inline, Inline::BlockFragment(_)))
     {
-        flush_run(stack, inlines);
+        flush_inline_run(stack, inlines);
         return;
     }
     let mut run = Vec::new();
     for inline in std::mem::take(inlines) {
         match inline {
             Inline::BlockFragment(block) => {
-                flush_run(stack, &mut run);
+                flush_inline_run(stack, &mut run);
                 push_block(stack, *block);
             }
             inline => run.push(inline),
         }
     }
-    flush_run(stack, &mut run);
+    flush_inline_run(stack, &mut run);
 }
 
 struct TableBuilder {
@@ -317,49 +311,42 @@ fn map_align(a: Alignment) -> Align {
     }
 }
 
-const SENTINEL: char = '\u{F8FF}';
+const COMMAND_MARKER: char = '\u{F8FF}';
 
-// Pull `◊name{...}` commands out before markdown parsing (their bodies hold
-// markdown-active characters) and leave a sentinel the parser restores. Fenced
-// ``` blocks stay literal; command bodies may span lines.
-fn extract_typst(md: &str) -> (String, Vec<Frag>) {
+fn extract_commands_from_markdown(md: &str) -> (String, Vec<ParsedCommand>) {
     let mut out = String::new();
-    let mut frags = Vec::new();
-    let mut fenced: Option<(u8, usize)> = None;
-    let mut buf = String::new();
+    let mut commands = Vec::new();
+    let mut code_fence: Option<(u8, usize)> = None;
+    let mut pending_markdown = String::new();
     for line in md.split_inclusive('\n') {
         let trimmed = line.trim_start();
         let marker = trimmed.as_bytes().first().copied().unwrap_or(0);
         let count = trimmed.bytes().take_while(|&b| b == marker).count();
-        if let Some((open, length)) = fenced {
+        if let Some((open, length)) = code_fence {
             if marker == open && count >= length && trimmed[count..].trim().is_empty() {
-                fenced = None;
+                code_fence = None;
             }
             out.push_str(line);
         } else if matches!(marker, b'`' | b'~')
             && count >= 3
             && (marker != b'`' || !trimmed[count..].contains('`'))
         {
-            extract_commands(&buf, &mut out, &mut frags);
-            buf.clear();
-            fenced = Some((marker, count));
+            extract_commands(&pending_markdown, &mut out, &mut commands);
+            pending_markdown.clear();
+            code_fence = Some((marker, count));
             out.push_str(line);
         } else {
-            if let Some(head) = missing_head(line, buf.lines().last()) {
-                buf.push_str(&head);
+            if let Some(head) = missing_table_header(line, pending_markdown.lines().last()) {
+                pending_markdown.push_str(&head);
             }
-            buf.push_str(line);
+            pending_markdown.push_str(line);
         }
     }
-    extract_commands(&buf, &mut out, &mut frags);
-    (out, frags)
+    extract_commands(&pending_markdown, &mut out, &mut commands);
+    (out, commands)
 }
 
-// A table written with no header at all, opening straight at its delimiter row, is not a
-// table to markdown: the delimiter has to follow a header row. Supply an empty one, which
-// draws as the body under a top rule. `prev` is the line before, absent at the top of the
-// document; a delimiter row after any line holding a `|` already has its header.
-fn missing_head(line: &str, prev: Option<&str>) -> Option<String> {
+fn missing_table_header(line: &str, prev: Option<&str>) -> Option<String> {
     let t = line.trim();
     if !t.starts_with('|') || !t.contains('-') {
         return None;
@@ -374,17 +361,13 @@ fn missing_head(line: &str, prev: Option<&str>) -> Option<String> {
     Some(format!("|{}\n", " |".repeat(cols)))
 }
 
-// Split art into literal line runs and the blocks its ◊ commands parse to. A command has
-// to sit alone on its line, since the block it renders is several lines tall; the leading
-// whitespace and guides of that line become the block's prefix, and are stripped from the
-// lines of its body. Anything else stays literal.
 pub(crate) fn art_parts(src: &str) -> Vec<ArtPart> {
     let mut parts = Vec::new();
     let mut lines: Vec<ArtLine> = Vec::new();
     let raw: Vec<&str> = src.lines().collect();
     let mut i = 0;
     while i < raw.len() {
-        match command_at(&raw[i..]) {
+        match parse_standalone_art_command(&raw[i..]) {
             Some((guide, block, used)) => {
                 if !lines.is_empty() {
                     parts.push(ArtPart::Lines(std::mem::take(&mut lines)));
@@ -407,10 +390,6 @@ pub(crate) fn art_parts(src: &str) -> Vec<ArtPart> {
     parts
 }
 
-// One art line. What it opens with, indentation and guides, is kept as written; the rest goes
-// through the ordinary inline parse, so a link, emphasis or a ◊ fragment works as anywhere
-// else. Only what markdown would do to the line as a whole, reflow it into a paragraph, is
-// left out.
 fn art_line(line: &str) -> ArtLine {
     let split = line
         .char_indices()
@@ -423,8 +402,6 @@ fn art_line(line: &str) -> ArtLine {
     }
 }
 
-// The inline content of one line of source. A line that markdown reads as a block of its own,
-// a list item or a heading say, keeps its characters instead: inside a figure those are art.
 pub(crate) fn art_inlines(text: &str) -> Vec<Inline> {
     if text.is_empty() {
         return Vec::new();
@@ -438,10 +415,7 @@ pub(crate) fn art_inlines(text: &str) -> Vec<Inline> {
     }
 }
 
-// A ◊ command opening on the first of `raw`, preceded on that line by guides only: its
-// prefix, the block it parses to, and how many lines it spans. The lines are dedented by
-// the prefix first, so a body written under a `│` branch does not carry the branch.
-fn command_at(raw: &[&str]) -> Option<(String, Block, usize)> {
+fn parse_standalone_art_command(raw: &[&str]) -> Option<(String, Block, usize)> {
     let first = raw[0];
     let start = first.find('◊')?;
     let guide = &first[..start];
@@ -480,37 +454,36 @@ fn command_at(raw: &[&str]) -> Option<(String, Block, usize)> {
         return None;
     }
     let block = match frag {
-        Frag::Block(b) => b,
-        Frag::Inline { src, width } => Block::BlockTypst { src, width },
+        ParsedCommand::Block(b) => b,
+        ParsedCommand::Inline { src, width } => Block::BlockTypst { src, width },
     };
     Some((guide.to_string(), block, used))
 }
 
-fn extract_commands(text: &str, out: &mut String, frags: &mut Vec<Frag>) {
+fn extract_commands(text: &str, out: &mut String, commands: &mut Vec<ParsedCommand>) {
     let mut rest = text;
     while !rest.is_empty() {
-        let tick = rest.find('`');
-        let loz = rest.find('◊');
-        // Copy an inline-code span verbatim so a documented `◊typst{...}` is not extracted.
-        let take_tick = match (tick, loz) {
+        let backtick_offset = rest.find('`');
+        let command_offset = rest.find('◊');
+        let code_precedes_command = match (backtick_offset, command_offset) {
             (Some(t), Some(l)) => t < l,
             (Some(_), None) => true,
             _ => false,
         };
-        if take_tick {
-            let t = tick.unwrap();
+        if code_precedes_command {
+            let t = backtick_offset.unwrap();
             out.push_str(&rest[..t]);
-            rest = &rest[t + copy_code_span(&rest[t..], out)..];
-        } else if let Some(p) = loz {
+            rest = &rest[t + copy_inline_code_span(&rest[t..], out)..];
+        } else if let Some(p) = command_offset {
             out.push_str(&rest[..p]);
             let after = &rest[p + '◊'.len_utf8()..];
             match parse_command(after) {
                 Some((frag, consumed)) => {
-                    let idx = frags.len();
-                    frags.push(frag);
-                    out.push(SENTINEL);
+                    let idx = commands.len();
+                    commands.push(frag);
+                    out.push(COMMAND_MARKER);
                     out.push_str(&idx.to_string());
-                    out.push(SENTINEL);
+                    out.push(COMMAND_MARKER);
                     rest = &after[consumed..];
                 }
                 None => {
@@ -525,9 +498,7 @@ fn extract_commands(text: &str, out: &mut String, frags: &mut Vec<Frag>) {
     }
 }
 
-// `s` starts with a backtick run; copy the inline-code span (through the matching
-// run) verbatim and return its byte length. An unclosed run copies just the run.
-fn copy_code_span(s: &str, out: &mut String) -> usize {
+fn copy_inline_code_span(s: &str, out: &mut String) -> usize {
     let n = s.bytes().take_while(|&b| b == b'`').count();
     let mut pos = n;
     while let Some(rel) = s[pos..].find('`') {
@@ -544,8 +515,8 @@ fn copy_code_span(s: &str, out: &mut String) -> usize {
     n
 }
 
-fn push_text(inlines: &mut Vec<Inline>, t: &str, style: Style, frags: &[Frag]) {
-    if !t.contains(SENTINEL) {
+fn push_text(inlines: &mut Vec<Inline>, t: &str, style: Style, commands: &[ParsedCommand]) {
+    if !t.contains(COMMAND_MARKER) {
         if !t.is_empty() {
             inlines.push(Inline::Text(t.to_string(), style));
         }
@@ -554,34 +525,34 @@ fn push_text(inlines: &mut Vec<Inline>, t: &str, style: Style, frags: &[Frag]) {
     let mut buf = String::new();
     let mut chars = t.chars().peekable();
     while let Some(c) = chars.next() {
-        if c != SENTINEL {
+        if c != COMMAND_MARKER {
             buf.push(c);
             continue;
         }
         let mut num = String::new();
         while let Some(&d) = chars.peek() {
             chars.next();
-            if d == SENTINEL {
+            if d == COMMAND_MARKER {
                 break;
             }
             num.push(d);
         }
-        match num.parse::<usize>().ok().and_then(|i| frags.get(i)) {
+        match num.parse::<usize>().ok().and_then(|i| commands.get(i)) {
             Some(frag) => {
                 if !buf.is_empty() {
                     inlines.push(Inline::Text(std::mem::take(&mut buf), style));
                 }
                 inlines.push(match frag {
-                    Frag::Inline { src, width } => Inline::InlineTypst {
+                    ParsedCommand::Inline { src, width } => Inline::InlineTypst {
                         src: src.clone(),
                         width: *width,
                         display: true,
                     },
-                    Frag::Block(b) => Inline::BlockFragment(Box::new(b.clone())),
+                    ParsedCommand::Block(b) => Inline::BlockFragment(Box::new(b.clone())),
                 });
             }
             None => {
-                buf.push(SENTINEL);
+                buf.push(COMMAND_MARKER);
                 buf.push_str(&num);
             }
         }
@@ -752,7 +723,6 @@ mod tests {
             Block::List { ordered, items } => {
                 assert!(!ordered);
                 assert_eq!(items.len(), 2);
-                // tight-item text must be captured, not dropped
                 assert!(matches!(
                     items[0].as_slice(),
                     [Block::Paragraph(p)] if matches!(p.as_slice(), [Inline::Text(t, _)] if t == "a")
@@ -806,7 +776,6 @@ mod tests {
         }
     }
 
-    // The source text of an art line: its guides, then its inline content flattened.
     fn art_text(lines: &[ArtLine]) -> Vec<String> {
         lines
             .iter()
@@ -1016,8 +985,8 @@ mod tests {
 
     #[test]
     fn nested_command_requires_an_empty_line_suffix() {
-        assert!(command_at(&["│ ◊tree{root} trailing"]).is_none());
-        let (_, block, used) = command_at(&[
+        assert!(parse_standalone_art_command(&["│ ◊tree{root} trailing"]).is_none());
+        let (_, block, used) = parse_standalone_art_command(&[
             "│ ◊details[why {this}]{",
             "│ answer",
             "│ }  ",

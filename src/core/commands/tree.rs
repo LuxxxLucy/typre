@@ -1,13 +1,13 @@
 use crate::core::ir::{Block, TreeNode};
 
-use super::{brace_cmd, Frag};
+use super::{parse_braced_command, ParsedCommand};
 
-pub(crate) fn parse(after: &str) -> Option<(Frag, usize)> {
-    let (body, used) = brace_cmd(after, "tree")?;
-    Some((Frag::Block(Block::Tree(nodes(&body))), used))
+pub(crate) fn parse(command_text: &str) -> Option<(ParsedCommand, usize)> {
+    let (body, used) = parse_braced_command(command_text, "tree")?;
+    Some((ParsedCommand::Block(Block::Tree(parse_nodes(&body))), used))
 }
 
-fn nodes(src: &str) -> Vec<TreeNode> {
+fn parse_nodes(src: &str) -> Vec<TreeNode> {
     let mut entries: Vec<(usize, String)> = Vec::new();
     for line in src.lines() {
         if line.trim().is_empty() {
@@ -23,21 +23,25 @@ fn nodes(src: &str) -> Vec<TreeNode> {
         }
         entries.push((indent, label));
     }
-    let mut pos = 0;
-    build(&entries, &mut pos, 0)
+    let mut position = 0;
+    build_subtree(&entries, &mut position, 0)
 }
 
-fn build(entries: &[(usize, String)], pos: &mut usize, min_indent: usize) -> Vec<TreeNode> {
+fn build_subtree(
+    entries: &[(usize, String)],
+    position: &mut usize,
+    min_indent: usize,
+) -> Vec<TreeNode> {
     let mut nodes = Vec::new();
-    while *pos < entries.len() {
-        let (indent, label) = &entries[*pos];
+    while *position < entries.len() {
+        let (indent, label) = &entries[*position];
         if *indent < min_indent {
             break;
         }
-        let cur_indent = *indent;
+        let current_indent = *indent;
         let label = label.clone();
-        *pos += 1;
-        let children = build(entries, pos, cur_indent + 1);
+        *position += 1;
+        let children = build_subtree(entries, position, current_indent + 1);
         nodes.push(TreeNode { label, children });
     }
     nodes

@@ -1,19 +1,19 @@
 use crate::core::ir::Width;
 
-use super::{bracket_cmd, Frag};
+use super::{parse_command_with_argument, ParsedCommand};
 
-pub(crate) fn parse(after: &str) -> Option<(Frag, usize)> {
-    let (arg, body, used) = bracket_cmd(after, "width")?;
+pub(crate) fn parse(command_text: &str) -> Option<(ParsedCommand, usize)> {
+    let (arg, body, used) = parse_command_with_argument(command_text, "width")?;
     Some((
-        Frag::Inline {
+        ParsedCommand::Inline {
             src: body,
-            width: value(&arg),
+            width: parse_width(&arg),
         },
         used,
     ))
 }
 
-fn value(spec: &str) -> Width {
+fn parse_width(spec: &str) -> Width {
     let s = spec.trim();
     if s.eq_ignore_ascii_case("full") {
         return Width::Percent(100);
