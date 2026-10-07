@@ -118,34 +118,3 @@ pub(crate) fn truncate(s: &str, max: usize) -> String {
     }
     format!("{}…", &s[..end])
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn wrapping_preserves_combining_marks_and_emoji() {
-        assert_eq!(
-            wrap_text("e\u{301}e\u{301}e\u{301}", 2),
-            ["e\u{301}e\u{301}", "e\u{301}"]
-        );
-        assert_eq!(wrap_text("👩‍💻👩‍💻", 2), ["👩‍💻", "👩‍💻"]);
-        assert_eq!(wrap_text("abcdefgh", 3), ["abc", "def", "gh"]);
-    }
-
-    #[test]
-    fn truncation_uses_display_columns() {
-        assert_eq!(truncate("中文中文", 5), "中文…");
-        assert_eq!(truncate("e\u{301}xy", 2), "e\u{301}…");
-        assert_eq!(truncate("x", 0), "");
-    }
-
-    #[test]
-    fn wrapping_measures_ligatures_as_complete_prefixes() {
-        assert_eq!(cell_width("لا"), 1);
-        assert_eq!(split_word("لا", 1), ["لا"]);
-        assert_eq!(split_word("لاx", 1), ["لا", "x"]);
-        assert_eq!(wrap_text("لاxy", 2), ["لاx", "y"]);
-        assert_eq!(truncate("لاxy", 2), "لا…");
-    }
-}

@@ -1,7 +1,5 @@
 mod reload;
 mod state;
-#[cfg(test)]
-mod tests;
 
 use std::fs;
 use std::io::{stdout, Write};

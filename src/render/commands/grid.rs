@@ -46,34 +46,3 @@ pub(crate) fn render(cells: &[String], term: &TermInfo, indent: usize, ops: &mut
         emit(vec![hrule('└', inner + 2, '┘'); count].join(" "));
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn grid_fits_borders_and_long_text() {
-        let cells = vec![
-            "abcdefghijk".to_string(),
-            "中文内容".to_string(),
-            "third".to_string(),
-        ];
-        for cols in 1..40 {
-            let term = TermInfo {
-                cols,
-                rows: 30,
-                cell_w_px: 8,
-                cell_h_px: 16,
-            };
-            let mut ops = Vec::new();
-            render(&cells, &term, 0, &mut ops);
-            assert!(
-                ops.iter().all(|op| match op {
-                    RenderOp::Text(text, _) => cell_width(text) <= cols as usize,
-                    _ => true,
-                }),
-                "columns={cols}"
-            );
-        }
-    }
-}

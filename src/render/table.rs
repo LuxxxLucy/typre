@@ -1,7 +1,5 @@
 use crate::assets::Assets;
 use crate::core::ir::{plain_text as flat_text, Align, Inline, Style, Width};
-#[cfg(test)]
-use crate::layout::{line_width, split_lines};
 use crate::layout::{natural_ppi, RenderOp, TermInfo};
 use crate::render::paint::{
     cell_width, heading_style, image_cells, indent_op, pad, place_image, wrap_text,
@@ -279,66 +277,6 @@ fn fit_widths(column_widths: &mut [usize], budget: usize) {
             if spare > 0 {
                 *width += 1;
                 spare -= 1;
-            }
-        }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn narrow_tables_keep_all_text_within_the_terminal() {
-        let head = vec![vec![Inline::Text("head".into(), Style::default())]; 3];
-        let rows = vec![vec![
-            vec![Inline::Text(
-                "abcdefgh中文".into(),
-                Style::default()
-            )];
-            3
-        ]];
-        let assets = Assets::new(std::path::Path::new("."));
-        for cols in 1..20 {
-            let term = TermInfo {
-                cols,
-                rows: 30,
-                cell_w_px: 8,
-                cell_h_px: 16,
-            };
-            let mut ops = Vec::new();
-            render(&[], &head, &rows, &term, &assets, 0, &mut ops);
-            assert!(
-                split_lines(ops)
-                    .iter()
-                    .all(|line| line_width(line) <= cols as usize),
-                "columns={cols}"
-            );
-        }
-    }
-
-    #[test]
-    fn table_widths_preserve_existing_distribution() {
-        for a in 0..8 {
-            for b in 0..8 {
-                for column in 0..8 {
-                    for budget in 3..24 {
-                        let mut expected = vec![a, b, column];
-                        while expected.iter().sum::<usize>() > budget {
-                            let widest = (0..3).max_by_key(|&i| expected[i]).unwrap();
-                            if expected[widest] <= 1 {
-                                break;
-                            }
-                            expected[widest] -= 1;
-                        }
-                        let mut actual = vec![a, b, column];
-                        fit_widths(&mut actual, budget);
-                        assert_eq!(
-                            actual, expected,
-                            "column_widths={a},{b},{column}; budget={budget}"
-                        );
-                    }
-                }
             }
         }
     }

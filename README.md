@@ -84,7 +84,7 @@ Scrolling selects rows from the current layout.
 File changes invalidate prepared assets; successful downloads refresh the current layout.
 
 `examples/render.rs` is a complete rendering example.
-Run `cargo test` for parser, layout, asset, and terminal-output checks.
+Run `cargo test` for command-line export, error reporting, and interactive presentation checks.
 
 The image placeholder table follows [Kitty’s row and column encoding](https://github.com/kovidgoyal/kitty/blob/master/gen/rowcolumn-diacritics.txt).
 It uses Unicode 6.0.0 combining characters from class 230.

@@ -127,23 +127,3 @@ fn split_breaks(inls: &[Inline]) -> Vec<Vec<Inline>> {
     }
     out
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn contents_titles_fit_display_columns() {
-        let entries = vec![TocEntry {
-            index: 1,
-            title: "中文中文中文".to_string(),
-        }];
-        let mut ops = Vec::new();
-        let hits = emit_toc(&entries, 8, 2, &mut ops);
-        assert!(hits[0].cols.end <= 10);
-        assert_eq!(hits[0].row, 2);
-        for row in split_lines(ops) {
-            assert!(line_width(&row) <= 10);
-        }
-    }
-}

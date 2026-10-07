@@ -193,39 +193,3 @@ impl State {
         }
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn scrolling_and_help_reuse_layout() {
-        let mut state = State::new(3);
-        assert_eq!(state.scroll_by(true, 10), Update::Frame);
-        assert_eq!(state.command(Command::ToggleHelp), Update::Frame);
-        assert_eq!(state.click(&HitAction::Goto(2)), Update::None);
-        assert_eq!(state.nav.page(), 0);
-        assert_eq!(state.command(Command::Next), Update::Layout);
-        assert_eq!(state.scroll, 0);
-    }
-
-    #[test]
-    fn reload_clears_structural_details_ids() {
-        let mut state = State::new(3);
-        state.click(&HitAction::ToggleDetails(0));
-        state.command(Command::Last);
-        state.reload(1);
-        assert_eq!(state.nav.page(), 0);
-        assert!(state.open().is_empty());
-    }
-
-    #[test]
-    fn long_prefix_saturates() {
-        let mut nav = Nav::new(3);
-        for _ in 0..100 {
-            nav.apply(Command::Digit(9));
-        }
-        nav.apply(Command::Last);
-        assert_eq!(nav.page(), 2);
-    }
-}

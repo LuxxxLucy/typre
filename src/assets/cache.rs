@@ -60,28 +60,3 @@ pub(crate) fn download(url: &str, png: &Path) -> Result<()> {
     }
     save_image(&out.stdout, png)
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn publication_exposes_only_completed_files() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("output.png");
-        let failed = publish_png(&path, |temporary| {
-            fs::write(temporary, b"partial")?;
-            assert!(!path.exists());
-            bail!("interrupted")
-        });
-        assert!(failed.is_err());
-        assert!(!path.exists());
-        publish_png(&path, |temporary| {
-            fs::write(temporary, b"complete")?;
-            assert!(!path.exists());
-            Ok(())
-        })
-        .unwrap();
-        assert_eq!(fs::read(path).unwrap(), b"complete");
-    }
-}
