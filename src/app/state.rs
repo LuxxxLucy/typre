@@ -91,7 +91,6 @@ impl Nav {
         self.page != prev
     }
 
-    // Re-clamp after a live reload changes the slide count.
     pub(super) fn set_len(&mut self, len: usize) {
         self.len = len.max(1);
         self.page = self.page.min(self.last());

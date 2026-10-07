@@ -30,14 +30,15 @@ use state::{command_for, State, Update};
 #[command(about = "Terminal typst slideshow")]
 struct Cli {
     deck: PathBuf,
-    /// Print the parsed slides and their drawing operations.
-    #[arg(long, conflicts_with = "export")]
+    #[arg(
+        long,
+        conflicts_with = "export",
+        help = "Print parsed slides and drawing operations"
+    )]
     dump_ops: bool,
-    /// Write the terminal byte stream.
-    #[arg(long)]
+    #[arg(long, help = "Write the terminal byte stream")]
     export: bool,
-    /// Set the export destination.
-    #[arg(short, long, requires = "export")]
+    #[arg(short, long, requires = "export", help = "Set the export destination")]
     output: Option<PathBuf>,
 }
 
@@ -108,7 +109,7 @@ fn load(path: &Path) -> Result<Deck> {
     Ok(parse(&text))
 }
 
-fn precompile_gate(
+fn prepare_and_confirm(
     emitter: &mut Emitter,
     deck: &Deck,
     assets: &Assets,
@@ -235,7 +236,7 @@ fn present(path: &Path, mut deck: Deck, assets: Assets, out: &mut impl Write) ->
     let mut term = TermInfo::acquire();
     let mut reload = Reload::new(path)?;
     let mut emitter = Emitter::default();
-    if !precompile_gate(&mut emitter, &deck, &assets, &term, out)? {
+    if !prepare_and_confirm(&mut emitter, &deck, &assets, &term, out)? {
         return Ok(());
     }
     let (tx, downloads) = mpsc::channel();
@@ -245,11 +246,14 @@ fn present(path: &Path, mut deck: Deck, assets: Assets, out: &mut impl Write) ->
     let mut glow = glow_runs(&frame.ops);
     reload.track(assets.dependencies())?;
     draw(&mut emitter, &frame, &state, out)?;
-    // Repeat the prepared frame for terminals that decode new images asynchronously.
-    let mut settle = true;
+    let mut repeat_frame_pending = true;
     loop {
         let mut update = Update::None;
-        if event::poll(Duration::from_millis(if settle { 0 } else { 100 }))? {
+        if event::poll(Duration::from_millis(if repeat_frame_pending {
+            0
+        } else {
+            100
+        }))? {
             update = input(event::read()?, &mut state, &mut term, &frame);
         }
         match update {
@@ -284,9 +288,9 @@ fn present(path: &Path, mut deck: Deck, assets: Assets, out: &mut impl Write) ->
                 glow_runs(&frame.ops)
             };
         }
-        if dirty || settle {
+        if dirty || repeat_frame_pending {
             draw(&mut emitter, &frame, &state, out)?;
-            settle = dirty;
+            repeat_frame_pending = dirty;
         } else if !glow.is_empty() {
             emitter.paint_glow(out, &glow)?;
         }

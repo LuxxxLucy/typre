@@ -46,8 +46,6 @@ impl Body {
     }
 }
 
-// Split an op stream into visual lines at LineBreaks, dropping the trailing empty
-// line every block leaves behind.
 pub fn split_lines(ops: Vec<RenderOp>) -> Vec<Vec<RenderOp>> {
     let mut lines = vec![Vec::new()];
     for op in ops {

@@ -16,10 +16,10 @@
 ## Quick start
 
 ```
-cargo build --release        # binary at target/release/typre
+cargo build --release
 cargo run -- examples/showcase.md
 
-cargo install --path .       # or simply install it
+cargo install --path .
 typre examples/showcase.md
 ```
 
@@ -83,5 +83,9 @@ Feature renderers share text, row, and box operations.
 Scrolling selects rows from the current layout.
 File changes invalidate prepared assets; successful downloads refresh the current layout.
 
-The library documentation contains a complete rendering example.
+`examples/render.rs` is a complete rendering example.
 Run `cargo test` for parser, layout, asset, and terminal-output checks.
+
+The image placeholder table follows [Kitty’s row and column encoding](https://github.com/kovidgoyal/kitty/blob/master/gen/rowcolumn-diacritics.txt).
+It uses Unicode 6.0.0 combining characters from class 230.
+Terminal image commands follow the [Kitty graphics protocol](https://sw.kovidgoyal.net/kitty/graphics-protocol/).

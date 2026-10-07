@@ -9,7 +9,6 @@ use crate::layout::RenderOp;
 use crate::layout::TermInfo;
 use crate::render::paint::Hit;
 
-// The slide body from row 0 (no screen clear, no chrome): ops, click targets, height.
 pub fn render(
     slide: &Slide,
     term: &TermInfo,

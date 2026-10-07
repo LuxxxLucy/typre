@@ -8,8 +8,9 @@ use anyhow::{bail, Context, Result};
 
 use super::cache;
 
-// Native-typst aliases for the helper names mitex emits.
-const MATH_SHIM: &str = r#"#let mitexsqrt(..a) = { let p = a.pos(); if p.len() == 1 { math.sqrt(p.at(0)) } else { math.root(p.at(1), p.at(0)) } }
+const INLINE_MATH_VERTICAL_PADDING_RATIO: f64 = 0.088;
+
+const MITEX_MATH_ALIASES: &str = r#"#let mitexsqrt(..a) = { let p = a.pos(); if p.len() == 1 { math.sqrt(p.at(0)) } else { math.root(p.at(1), p.at(0)) } }
 #let zws = math.zws
 #let aligned(..a) = a.pos().join()
 #let matrix(..a) = math.mat(delim: none, ..a)
@@ -19,19 +20,14 @@ const MATH_SHIM: &str = r#"#let mitexsqrt(..a) = { let p = a.pos(); if p.len() =
 #let Vmatrix(..a) = math.mat(delim: "‖", ..a)
 "#;
 
-// Hash the local files a fragment imports, recursing through .typ imports.
-fn imported_files_digest(
-    src: &str,
-    deck_dir: &Path,
-    dependencies: &mut BTreeSet<PathBuf>,
-) -> String {
+fn dependency_digest(src: &str, deck_dir: &Path, dependencies: &mut BTreeSet<PathBuf>) -> String {
     let mut hasher = blake3::Hasher::new();
     let mut seen = BTreeSet::new();
-    collect_refs(src, deck_dir, &mut seen, dependencies, &mut hasher);
+    hash_referenced_files(src, deck_dir, &mut seen, dependencies, &mut hasher);
     hasher.finalize().to_hex().to_string()
 }
 
-fn collect_refs(
+fn hash_referenced_files(
     src: &str,
     base: &Path,
     seen: &mut BTreeSet<PathBuf>,
@@ -60,7 +56,7 @@ fn collect_refs(
         if path.extension().is_some_and(|e| e == "typ") {
             if let Ok(text) = std::str::from_utf8(&bytes) {
                 let parent = path.parent().unwrap_or(base).to_path_buf();
-                collect_refs(text, &parent, seen, dependencies, hasher);
+                hash_referenced_files(text, &parent, seen, dependencies, hasher);
             }
         }
     }
@@ -73,16 +69,15 @@ pub(crate) fn compile_fragment(
     display: bool,
     dependencies: &mut BTreeSet<PathBuf>,
 ) -> Result<PathBuf> {
-    // Pad inline math vertically so the glyph fills ~85% of the one-cell line height.
     let body = if display {
         format!("$ {src} $")
     } else {
-        format!("#context {{ let e = [${src}$]; box(inset: (y: measure(e).height * 0.088), e) }}")
+        format!("#context {{ let e = [${src}$]; box(inset: (y: measure(e).height * {INLINE_MATH_VERTICAL_PADDING_RATIO}), e) }}")
     };
     let wrapped = format!(
-        "#set page(width: auto, height: auto, margin: 0pt, fill: none)\n#set text(fill: white)\n{MATH_SHIM}{body}"
+        "#set page(width: auto, height: auto, margin: 0pt, fill: none)\n#set text(fill: white)\n{MITEX_MATH_ALIASES}{body}"
     );
-    let deps = imported_files_digest(src, deck_dir, dependencies);
+    let deps = dependency_digest(src, deck_dir, dependencies);
     let mut hash = blake3::Hasher::new();
     hash.update(&ppi.to_le_bytes());
     let root = deck_dir.as_os_str().as_encoded_bytes();
@@ -95,8 +90,6 @@ pub(crate) fn compile_fragment(
         return Ok(png);
     }
     cache::publish_png(&png, |temporary| {
-        // The source goes in on stdin, so no scratch file lands next to the deck. A relative
-        // import in it resolves against `--root`, which is the deck's own directory.
         let mut child = Command::new("typst")
             .arg("compile")
             .arg("--root")
@@ -151,7 +144,7 @@ mod tests {
         .unwrap();
         symlink("target.typ", root.join("alias.typ")).unwrap();
         let mut dependencies = BTreeSet::new();
-        imported_files_digest("#include \"alias.typ\"", &root, &mut dependencies);
+        dependency_digest("#include \"alias.typ\"", &root, &mut dependencies);
         assert_eq!(
             dependencies,
             BTreeSet::from([
@@ -173,8 +166,7 @@ mod tests {
         )
         .unwrap();
         let mut dependencies = BTreeSet::new();
-        let first =
-            imported_files_digest("#include \"a.typ\"\n\".\"\n\"\"", &root, &mut dependencies);
+        let first = dependency_digest("#include \"a.typ\"\n\".\"\n\"\"", &root, &mut dependencies);
         assert_eq!(
             dependencies,
             BTreeSet::from([
@@ -184,7 +176,7 @@ mod tests {
             ])
         );
         fs::write(root.join("missing.txt"), "created").unwrap();
-        let second = imported_files_digest(
+        let second = dependency_digest(
             "#include \"a.typ\"\n\".\"\n\"\"",
             &root,
             &mut BTreeSet::new(),

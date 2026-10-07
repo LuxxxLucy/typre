@@ -8,30 +8,37 @@ use crate::render::paint::{
 };
 use std::path::PathBuf;
 
-// A table cell: the text it wraps, and the figure a `◊typst` or `◊width` command in
-// it renders to. The figure takes the top lines of the cell, the text wraps under it.
 #[derive(Default)]
-struct Cell {
+struct TableEntry {
     text: String,
-    fig: Option<Fig>,
+    figure: Option<TableFigure>,
 }
 
-struct Fig {
+struct TableFigure {
     png: PathBuf,
     width: Width,
     cols: u16,
     rows: u16,
 }
 
-// Render the first typst fragment in the cell and size it against `avail` columns.
-fn cell_fig(inls: &[Inline], term: &TermInfo, assets: &Assets, avail: usize) -> Option<Fig> {
+fn prepare_figure(
+    inls: &[Inline],
+    term: &TermInfo,
+    assets: &Assets,
+    available_columns: usize,
+) -> Option<TableFigure> {
     let (src, width) = inls.iter().find_map(|i| match i {
         Inline::InlineTypst { src, width, .. } => Some((src, *width)),
         _ => None,
     })?;
     let png = assets.fragment(src, natural_ppi(term), true).ok()?;
-    let (cols, rows) = image_cells(assets.dimensions(&png), &term.with_cols(avail), 0, width);
-    Some(Fig {
+    let (cols, rows) = image_cells(
+        assets.dimensions(&png),
+        &term.with_cols(available_columns),
+        0,
+        width,
+    );
+    Some(TableFigure {
         png,
         width,
         cols,
@@ -48,30 +55,40 @@ pub(super) fn render(
     indent: usize,
     ops: &mut Vec<RenderOp>,
 ) {
-    let ncol = head.len().max(rows.iter().map(Vec::len).max().unwrap_or(0));
-    if ncol == 0 {
+    let column_count = head.len().max(rows.iter().map(Vec::len).max().unwrap_or(0));
+    if column_count == 0 {
         return;
     }
-    let align_of = |c: usize| aligns.get(c).copied().unwrap_or(Align::Left);
-    let content_w = (term.cols as usize).saturating_sub(indent).max(1);
-    let build = |inls: Option<&Vec<Inline>>| -> Cell {
+    let column_alignment = |column: usize| aligns.get(column).copied().unwrap_or(Align::Left);
+    let content_width = (term.cols as usize).saturating_sub(indent).max(1);
+    let prepare_entry = |inls: Option<&Vec<Inline>>| -> TableEntry {
         let inls = match inls {
             Some(i) => i,
-            None => return Cell::default(),
+            None => return TableEntry::default(),
         };
-        Cell {
+        TableEntry {
             text: flat_text(inls),
-            fig: cell_fig(inls, term, assets, content_w),
+            figure: prepare_figure(inls, term, assets, content_width),
         }
     };
-    let mut head_cells: Vec<Cell> = (0..ncol).map(|c| build(head.get(c))).collect();
-    let mut body_cells: Vec<Vec<Cell>> = rows
+    let mut header_entries: Vec<TableEntry> = (0..column_count)
+        .map(|column| prepare_entry(head.get(column)))
+        .collect();
+    let mut body_entries: Vec<Vec<TableEntry>> = rows
         .iter()
-        .map(|row| (0..ncol).map(|c| build(row.get(c))).collect())
+        .map(|row| {
+            (0..column_count)
+                .map(|column| prepare_entry(row.get(column)))
+                .collect()
+        })
         .collect();
 
-    if content_w < 1 + 4 * ncol {
-        for (index, row) in std::iter::once(&head_cells).chain(&body_cells).enumerate() {
+    let frame_columns = 1 + 3 * column_count;
+    if content_width < frame_columns + column_count {
+        for (index, row) in std::iter::once(&header_entries)
+            .chain(&body_entries)
+            .enumerate()
+        {
             if index == 0 && head.iter().all(Vec::is_empty) {
                 continue;
             }
@@ -80,11 +97,11 @@ pub(super) fn render(
             } else {
                 Style::default()
             };
-            for cell in row {
-                if let Some(fig) = &cell.fig {
-                    place_image(ops, fig.png.clone(), assets, term, indent, fig.width);
+            for entry in row {
+                if let Some(figure) = &entry.figure {
+                    place_image(ops, figure.png.clone(), assets, term, indent, figure.width);
                 }
-                for line in wrap_text(&cell.text, content_w) {
+                for line in wrap_text(&entry.text, content_width) {
                     ops.push(indent_op(indent));
                     ops.push(RenderOp::Text(line, style));
                     ops.push(RenderOp::LineBreak);
@@ -95,93 +112,111 @@ pub(super) fn render(
         return;
     }
 
-    // A column is as wide as its widest text, or its widest figure.
-    let mut widths = vec![0usize; ncol];
-    for c in 0..ncol {
-        let mut w = cell_width(&head_cells[c].text);
-        w = w.max(head_cells[c].fig.as_ref().map_or(0, |f| f.cols as usize));
-        for row in &body_cells {
-            w = w.max(cell_width(&row[c].text));
-            w = w.max(row[c].fig.as_ref().map_or(0, |f| f.cols as usize));
+    let mut column_widths = vec![0usize; column_count];
+    for column in 0..column_count {
+        let mut width = cell_width(&header_entries[column].text);
+        width = width.max(
+            header_entries[column]
+                .figure
+                .as_ref()
+                .map_or(0, |figure| figure.cols as usize),
+        );
+        for row in &body_entries {
+            width = width.max(cell_width(&row[column].text));
+            width = width.max(
+                row[column]
+                    .figure
+                    .as_ref()
+                    .map_or(0, |figure| figure.cols as usize),
+            );
         }
-        widths[c] = w;
+        column_widths[column] = width;
     }
 
-    // Fit within the terminal: each column costs its width plus a ` … │` of 3, and
-    // the table opens with one `│`. Cap the widest columns so that the row fits, then
-    // cells wrap into their capped width instead of overrunning the right edge.
     let budget = (term.cols as usize)
-        .saturating_sub(indent + 1 + 3 * ncol)
-        .max(ncol);
-    fit_widths(&mut widths, budget);
+        .saturating_sub(indent + frame_columns)
+        .max(column_count);
+    fit_widths(&mut column_widths, budget);
 
-    // Re-fit each figure to the column it ended up with.
-    for c in 0..ncol {
-        for cell in
-            std::iter::once(&mut head_cells[c]).chain(body_cells.iter_mut().map(|r| &mut r[c]))
+    for column in 0..column_count {
+        for entry in std::iter::once(&mut header_entries[column])
+            .chain(body_entries.iter_mut().map(|row| &mut row[column]))
         {
-            if let Some(f) = cell.fig.as_mut() {
+            if let Some(figure) = entry.figure.as_mut() {
                 let (cols, rows) = image_cells(
-                    assets.dimensions(&f.png),
-                    &term.with_cols(widths[c]),
+                    assets.dimensions(&figure.png),
+                    &term.with_cols(column_widths[column]),
                     0,
-                    f.width,
+                    figure.width,
                 );
-                f.cols = cols;
-                f.rows = rows;
+                figure.cols = cols;
+                figure.rows = rows;
             }
         }
     }
 
-    let pre = " ".repeat(indent);
-    let border = |l: char, m: char, r: char| {
-        let mut s = String::new();
-        s.push(l);
-        for (c, w) in widths.iter().enumerate() {
-            s.push_str(&"─".repeat(w + 2));
-            s.push(if c + 1 == ncol { r } else { m });
+    let indent_text = " ".repeat(indent);
+    let border = |left: char, junction: char, right: char| {
+        let mut line = String::new();
+        line.push(left);
+        for (column, width) in column_widths.iter().enumerate() {
+            line.push_str(&"─".repeat(width + 2));
+            line.push(if column + 1 == column_count {
+                right
+            } else {
+                junction
+            });
         }
-        s
+        line
     };
     let push_line = |s: String, ops: &mut Vec<RenderOp>| {
-        ops.push(RenderOp::Text(format!("{pre}{s}"), Style::default()));
+        ops.push(RenderOp::Text(
+            format!("{indent_text}{s}"),
+            Style::default(),
+        ));
         ops.push(RenderOp::LineBreak);
     };
-    let emit_row = |cells: &[Cell], style: Style, ops: &mut Vec<RenderOp>| {
-        let wrapped: Vec<Vec<String>> = (0..ncol)
-            .map(|c| wrap_text(&cells[c].text, widths[c]))
+    let emit_row = |entries: &[TableEntry], style: Style, ops: &mut Vec<RenderOp>| {
+        let wrapped_text: Vec<Vec<String>> = (0..column_count)
+            .map(|column| wrap_text(&entries[column].text, column_widths[column]))
             .collect();
-        let fig_rows = |c: usize| cells[c].fig.as_ref().map_or(0, |f| f.rows as usize);
-        let height = (0..ncol)
-            .map(|c| fig_rows(c) + wrapped[c].len())
+        let figure_rows = |column: usize| {
+            entries[column]
+                .figure
+                .as_ref()
+                .map_or(0, |figure| figure.rows as usize)
+        };
+        let height = (0..column_count)
+            .map(|column| figure_rows(column) + wrapped_text[column].len())
             .max()
             .unwrap_or(1)
             .max(1);
-        for r in 0..height {
-            ops.push(RenderOp::Text(pre.clone(), Style::default()));
-            for c in 0..ncol {
+        for row in 0..height {
+            ops.push(RenderOp::Text(indent_text.clone(), Style::default()));
+            for column in 0..column_count {
                 ops.push(RenderOp::Text("│ ".to_string(), Style::default()));
-                if r < fig_rows(c) {
-                    // The figure line carries no text, so pad around it by hand to
-                    // keep the right border in its column.
-                    let f = cells[c].fig.as_ref().unwrap();
-                    let slack = widths[c].saturating_sub(f.cols as usize);
-                    let left = slack / 2;
+                if row < figure_rows(column) {
+                    let figure = entries[column].figure.as_ref().unwrap();
+                    let figure_padding = column_widths[column].saturating_sub(figure.cols as usize);
+                    let left = figure_padding / 2;
                     ops.push(RenderOp::Text(" ".repeat(left), style));
                     ops.push(RenderOp::ImageRow {
-                        png_path: f.png.clone(),
-                        cols: f.cols,
-                        rows: f.rows,
-                        row: r as u16,
+                        png_path: figure.png.clone(),
+                        cols: figure.cols,
+                        rows: figure.rows,
+                        row: row as u16,
                     });
-                    ops.push(RenderOp::Text(" ".repeat(slack - left + 1), style));
+                    ops.push(RenderOp::Text(" ".repeat(figure_padding - left + 1), style));
                 } else {
-                    let seg = wrapped[c]
-                        .get(r - fig_rows(c))
+                    let text_line = wrapped_text[column]
+                        .get(row - figure_rows(column))
                         .map(String::as_str)
                         .unwrap_or("");
                     ops.push(RenderOp::Text(
-                        format!("{} ", pad(seg, widths[c], align_of(c))),
+                        format!(
+                            "{} ",
+                            pad(text_line, column_widths[column], column_alignment(column))
+                        ),
                         style,
                     ));
                 }
@@ -191,49 +226,54 @@ pub(super) fn render(
         }
     };
 
-    // A blank line between body rows, so entries read apart without a rule.
-    let gap = {
+    let row_separator = {
         let mut s = String::new();
-        for w in &widths {
+        for width in &column_widths {
             s.push_str("│ ");
-            s.push_str(&" ".repeat(w + 1));
+            s.push_str(&" ".repeat(width + 1));
         }
         s.push('│');
         s
     };
 
     push_line(border('┌', '┬', '┐'), ops);
-    // Markdown has no headerless table: the delimiter row is required and the first row is
-    // the header. A header left empty is how one is asked for, so the row and the rule under
-    // it are dropped, and the top rule opens the body.
-    if head.iter().any(|cell| !cell.is_empty()) {
-        emit_row(&head_cells, heading_style(), ops);
+    if head.iter().any(|entry| !entry.is_empty()) {
+        emit_row(&header_entries, heading_style(), ops);
         push_line(border('├', '┼', '┤'), ops);
     }
-    for (i, row) in body_cells.iter().enumerate() {
+    for (i, row) in body_entries.iter().enumerate() {
         if i > 0 {
-            push_line(gap.clone(), ops);
+            push_line(row_separator.clone(), ops);
         }
         emit_row(row, Style::default(), ops);
     }
     push_line(border('└', '┴', '┘'), ops);
 }
 
-fn fit_widths(widths: &mut [usize], budget: usize) {
-    if widths.iter().sum::<usize>() <= budget {
+fn fit_widths(column_widths: &mut [usize], budget: usize) {
+    if column_widths.iter().sum::<usize>() <= budget {
         return;
     }
-    let (mut low, mut high) = (0, widths.iter().copied().max().unwrap_or(0));
+    let (mut low, mut high) = (0, column_widths.iter().copied().max().unwrap_or(0));
     while low < high {
         let cap = low + (high - low).div_ceil(2);
-        if widths.iter().map(|width| (*width).min(cap)).sum::<usize>() <= budget {
+        if column_widths
+            .iter()
+            .map(|width| (*width).min(cap))
+            .sum::<usize>()
+            <= budget
+        {
             low = cap;
         } else {
             high = cap - 1;
         }
     }
-    let mut spare = budget - widths.iter().map(|width| (*width).min(low)).sum::<usize>();
-    for width in widths {
+    let mut spare = budget
+        - column_widths
+            .iter()
+            .map(|width| (*width).min(low))
+            .sum::<usize>();
+    for width in column_widths {
         if *width > low {
             *width = low;
             if spare > 0 {
@@ -281,9 +321,9 @@ mod tests {
     fn table_widths_preserve_existing_distribution() {
         for a in 0..8 {
             for b in 0..8 {
-                for c in 0..8 {
+                for column in 0..8 {
                     for budget in 3..24 {
-                        let mut expected = vec![a, b, c];
+                        let mut expected = vec![a, b, column];
                         while expected.iter().sum::<usize>() > budget {
                             let widest = (0..3).max_by_key(|&i| expected[i]).unwrap();
                             if expected[widest] <= 1 {
@@ -291,9 +331,12 @@ mod tests {
                             }
                             expected[widest] -= 1;
                         }
-                        let mut actual = vec![a, b, c];
+                        let mut actual = vec![a, b, column];
                         fit_widths(&mut actual, budget);
-                        assert_eq!(actual, expected, "widths={a},{b},{c}; budget={budget}");
+                        assert_eq!(
+                            actual, expected,
+                            "column_widths={a},{b},{column}; budget={budget}"
+                        );
                     }
                 }
             }

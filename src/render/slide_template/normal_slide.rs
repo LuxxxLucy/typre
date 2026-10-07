@@ -5,11 +5,9 @@ use crate::core::ir::Slide;
 use crate::layout::ops::hits as click_hits;
 use crate::layout::RenderOp;
 use crate::layout::{layout, TermInfo};
-use crate::render::blocks::{emit_block, Toggles};
+use crate::render::blocks::{emit_block, DetailsState};
 use crate::render::paint::Hit;
 
-// A normal slide: top padding, then each block at the content margin. Details boxes and links
-// are click targets.
 pub(crate) fn render(
     slide: &Slide,
     term: &TermInfo,
@@ -18,12 +16,12 @@ pub(crate) fn render(
 ) -> (Vec<RenderOp>, Vec<Hit>) {
     let mut ops = Vec::new();
     let mut hits: Vec<Hit> = Vec::new();
-    let (margin, content_w) = layout(term);
-    let body = term.with_cols(margin + content_w);
-    ops.push(RenderOp::LineBreak); // top padding
-    let mut tg = Toggles { open, next_id: 0 };
+    let (margin, content_width) = layout(term);
+    let body = term.with_cols(margin + content_width);
+    ops.push(RenderOp::LineBreak);
+    let mut details = DetailsState { open, next_id: 0 };
     for block in &slide.blocks {
-        emit_block(block, &body, assets, margin, &mut tg, &mut ops);
+        emit_block(block, &body, assets, margin, &mut details, &mut ops);
         ops.push(RenderOp::LineBreak);
     }
     hits.extend(click_hits(&ops));

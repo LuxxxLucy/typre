@@ -5,8 +5,6 @@ pub use rows::{line_width, split_lines, Body};
 
 pub(crate) mod text;
 
-// Terminal resolution and the slide geometry derived from it.
-
 pub struct TermInfo {
     pub cols: u16,
     pub rows: u16,
@@ -25,28 +23,26 @@ impl TermInfo {
     }
 }
 
-// Match typst raster resolution to the terminal cell height, so math sits at text
-// line-height and stays crisp on any display (144 ppi at a 16px cell).
 pub(crate) fn natural_ppi(term: &TermInfo) -> u32 {
-    (term.cell_h_px as u32 * 9).max(72)
+    const PPI_PER_CELL_HEIGHT_PIXEL: u32 = 9;
+    const MIN_IMAGE_PPI: u32 = 72;
+    (term.cell_h_px as u32 * PPI_PER_CELL_HEIGHT_PIXEL).max(MIN_IMAGE_PPI)
 }
 
-// Rows the bottom status bar occupies (separator, footer, and a blank gap above).
 pub(crate) const FOOTER_RESERVE: usize = 3;
 
-const MAX_CONTENT_W: usize = 90;
-const MARGIN: usize = 4;
+const MAX_CONTENT_COLUMNS: usize = 90;
+const MIN_SIDE_MARGIN: usize = 4;
 
-// Zen column: a capped content width centered in the terminal, never closer than
-// MARGIN to either edge. On a wide terminal the slack splits evenly left and right.
 pub(crate) fn layout(term: &TermInfo) -> (usize, usize) {
     let cols = term.cols as usize;
-    let content_w = cols.saturating_sub(MARGIN * 2).clamp(1, MAX_CONTENT_W);
-    let margin = cols.saturating_sub(content_w) / 2;
-    (margin, content_w)
+    let content_width = cols
+        .saturating_sub(MIN_SIDE_MARGIN * 2)
+        .clamp(1, MAX_CONTENT_COLUMNS);
+    let margin = cols.saturating_sub(content_width) / 2;
+    (margin, content_width)
 }
 
-// Body rows the bottom status bar leaves for content.
 pub fn viewport(term: &TermInfo) -> usize {
     (term.rows as usize).saturating_sub(FOOTER_RESERVE)
 }

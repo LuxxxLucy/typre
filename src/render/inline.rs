@@ -5,60 +5,62 @@ use crate::layout::RenderOp;
 use crate::layout::{natural_ppi, TermInfo};
 use crate::render::paint::{break_units, cell_width, code_style, indent_op};
 
-// Lay inline content into a column of `term.cols - hang`, wrapping on spaces.
-// The first line starts at `lead`; wrapped lines align at the hanging indent
-// `hang` (for a list item the marker already fills the gap before the first line,
-// so it passes lead 0 and hang past the marker).
 pub(crate) fn emit_inlines(
     inls: &[Inline],
     base: Style,
     term: &TermInfo,
     assets: &Assets,
-    lead: usize,
-    hang: usize,
+    first_indent: usize,
+    continuation_indent: usize,
     ops: &mut Vec<RenderOp>,
 ) {
     let tokens = inline_tokens(inls, base, term, assets);
-    emit_tokens(&tokens, term.cols as usize, lead, hang, ops);
+    emit_tokens(
+        &tokens,
+        term.cols as usize,
+        first_indent,
+        continuation_indent,
+        ops,
+    );
 }
 
 pub(crate) fn emit_tokens(
-    tokens: &[Tok],
+    tokens: &[InlineToken],
     cols: usize,
-    lead: usize,
-    hang: usize,
+    first_indent: usize,
+    continuation_indent: usize,
     ops: &mut Vec<RenderOp>,
 ) {
-    let width = cols.saturating_sub(hang).max(1);
+    let width = cols.saturating_sub(continuation_indent).max(1);
     let mut col = 0usize;
-    if lead > 0 {
-        ops.push(indent_op(lead));
+    if first_indent > 0 {
+        ops.push(indent_op(first_indent));
     }
     let newline = |ops: &mut Vec<RenderOp>| {
         ops.push(RenderOp::LineBreak);
-        if hang > 0 {
-            ops.push(indent_op(hang));
+        if continuation_indent > 0 {
+            ops.push(indent_op(continuation_indent));
         }
     };
     for token in tokens {
-        if let Tok::Break = token {
+        if let InlineToken::Break = token {
             newline(ops);
             col = 0;
             continue;
         }
-        let token_width = tok_width(token);
+        let token_width = token_width(token);
         if col > 0 && col + token_width > width {
             newline(ops);
             col = 0;
-            if matches!(token, Tok::Space(_))
-                || matches!(token, Tok::Link { label, .. } if label == " ")
+            if matches!(token, InlineToken::Space(_))
+                || matches!(token, InlineToken::Link { label, .. } if label == " ")
             {
                 continue;
             }
         }
         let text = match token {
-            Tok::Text(text, _) => Some(text.as_str()),
-            Tok::Link { label, .. } => Some(label.as_str()),
+            InlineToken::Text(text, _) => Some(text.as_str()),
+            InlineToken::Link { label, .. } => Some(label.as_str()),
             _ => None,
         };
         if let Some(text) = text {
@@ -69,8 +71,10 @@ pub(crate) fn emit_tokens(
                     col = 0;
                 }
                 match token {
-                    Tok::Text(_, style) => ops.push(RenderOp::Text(part.to_string(), *style)),
-                    Tok::Link { url, style, .. } => ops.push(RenderOp::Link {
+                    InlineToken::Text(_, style) => {
+                        ops.push(RenderOp::Text(part.to_string(), *style))
+                    }
+                    InlineToken::Link { url, style, .. } => ops.push(RenderOp::Link {
                         label: part.to_string(),
                         url: url.clone(),
                         style: *style,
@@ -81,8 +85,8 @@ pub(crate) fn emit_tokens(
             }
         } else {
             match token {
-                Tok::Space(style) => ops.push(RenderOp::Text(" ".to_string(), *style)),
-                Tok::Img { png, cols } => ops.push(RenderOp::ImageRow {
+                InlineToken::Space(style) => ops.push(RenderOp::Text(" ".to_string(), *style)),
+                InlineToken::Image { png, cols } => ops.push(RenderOp::ImageRow {
                     png_path: png.clone(),
                     cols: (*cols as usize).min(width) as u16,
                     rows: 1,
@@ -95,24 +99,24 @@ pub(crate) fn emit_tokens(
     }
 }
 
-pub(crate) fn tokens_width(tokens: &[Tok]) -> usize {
+pub(crate) fn tokens_width(tokens: &[InlineToken]) -> usize {
     let mut widest = 0;
     let mut width = 0;
     for token in tokens {
-        if matches!(token, Tok::Break) {
+        if matches!(token, InlineToken::Break) {
             widest = widest.max(width);
             width = 0;
         } else {
-            width += tok_width(token);
+            width += token_width(token);
         }
     }
     widest.max(width)
 }
 
-pub(crate) enum Tok {
+pub(crate) enum InlineToken {
     Text(String, Style),
     Space(Style),
-    Img {
+    Image {
         png: std::path::PathBuf,
         cols: u16,
     },
@@ -124,13 +128,13 @@ pub(crate) enum Tok {
     Break,
 }
 
-fn tok_width(t: &Tok) -> usize {
+fn token_width(t: &InlineToken) -> usize {
     match t {
-        Tok::Text(s, _) => cell_width(s),
-        Tok::Space(_) => 1,
-        Tok::Img { cols, .. } => *cols as usize,
-        Tok::Link { label, .. } => cell_width(label),
-        Tok::Break => 0,
+        InlineToken::Text(s, _) => cell_width(s),
+        InlineToken::Space(_) => 1,
+        InlineToken::Image { cols, .. } => *cols as usize,
+        InlineToken::Link { label, .. } => cell_width(label),
+        InlineToken::Break => 0,
     }
 }
 
@@ -139,14 +143,15 @@ pub(crate) fn inline_tokens(
     base: Style,
     term: &TermInfo,
     assets: &Assets,
-) -> Vec<Tok> {
-    let mut toks = Vec::new();
+) -> Vec<InlineToken> {
+    let mut tokens = Vec::new();
     for inl in inls {
         match inl {
-            Inline::Text(t, s) => push_words(&mut toks, t, merge(base, *s)),
-            // One contiguous chip with a space of padding each side, so the
-            // background reads like the code block's panel, not a bare word.
-            Inline::Code(t) => toks.push(Tok::Text(format!(" {t} "), merge(base, code_style()))),
+            Inline::Text(t, s) => push_words(&mut tokens, t, merge(base, *s)),
+            Inline::Code(t) => tokens.push(InlineToken::Text(
+                format!(" {t} "),
+                merge(base, code_style()),
+            )),
             Inline::Link { label, url } => {
                 let style = merge(
                     base,
@@ -156,7 +161,7 @@ pub(crate) fn inline_tokens(
                     },
                 );
                 for (unit, _) in break_units(label) {
-                    toks.push(Tok::Link {
+                    tokens.push(InlineToken::Link {
                         label: unit.to_string(),
                         url: url.clone(),
                         style,
@@ -166,33 +171,33 @@ pub(crate) fn inline_tokens(
             Inline::InlineTypst { src, .. } => match assets.fragment(src, natural_ppi(term), false)
             {
                 Ok(png) => {
-                    let cw = term.cell_w_px.max(1) as f32;
-                    let ch = term.cell_h_px.max(1) as f32;
-                    let (w, h) = assets.dimensions(&png).unwrap_or((cw as u32, ch as u32));
-                    // One cell tall (r=1); the placeholder fit preserves aspect, so round
-                    // the width up. A box narrower than the fragment's aspect shrinks it
-                    // below one cell, leaving fragments at inconsistent heights.
-                    let cols = ((w as f32 / h as f32) * ch / cw).ceil().max(1.0) as u16;
-                    toks.push(Tok::Img { png, cols });
+                    let cell_width_px = term.cell_w_px.max(1) as f32;
+                    let cell_height_px = term.cell_h_px.max(1) as f32;
+                    let (image_width_px, image_height_px) = assets
+                        .dimensions(&png)
+                        .unwrap_or((cell_width_px as u32, cell_height_px as u32));
+                    let cols = ((image_width_px as f32 / image_height_px as f32) * cell_height_px
+                        / cell_width_px)
+                        .ceil()
+                        .max(1.0) as u16;
+                    tokens.push(InlineToken::Image { png, cols });
                 }
-                Err(e) => push_words(&mut toks, &format!("[typst error: {e}]"), base),
+                Err(e) => push_words(&mut tokens, &format!("[typst error: {e}]"), base),
             },
-            Inline::SoftBreak => toks.push(Tok::Space(base)),
-            Inline::HardBreak => toks.push(Tok::Break),
+            Inline::SoftBreak => tokens.push(InlineToken::Space(base)),
+            Inline::HardBreak => tokens.push(InlineToken::Break),
             Inline::BlockFragment(_) => {}
         }
     }
-    toks
+    tokens
 }
 
-// One Tok per break unit, so the inline flow and the plain-text wrapper agree on where a
-// line may break.
-fn push_words(toks: &mut Vec<Tok>, text: &str, style: Style) {
+fn push_words(tokens: &mut Vec<InlineToken>, text: &str, style: Style) {
     for (unit, _) in break_units(text) {
         if unit == " " {
-            toks.push(Tok::Space(style));
+            tokens.push(InlineToken::Space(style));
         } else {
-            toks.push(Tok::Text(unit.to_string(), style));
+            tokens.push(InlineToken::Text(unit.to_string(), style));
         }
     }
 }

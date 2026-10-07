@@ -1,4 +1,4 @@
-use super::boxes::{emit_box, BoxDeco};
+use super::boxes::{emit_box, BoxStyle};
 use super::commands;
 use super::inline::{emit_inlines, emit_tokens, inline_tokens, tokens_width, uppercase_inlines};
 use super::paint::{
@@ -9,14 +9,12 @@ use crate::core::ir::{Align, Block, Inline, Style, Width};
 use crate::layout::{split_lines, RenderOp, TermInfo};
 use std::collections::HashSet;
 
-// Details boxes are numbered as they are emitted, at any nesting depth, so a box inside art
-// toggles like one at the top of a slide. `open` holds the ids the user has expanded.
-pub(crate) struct Toggles<'a> {
+pub(crate) struct DetailsState<'a> {
     pub open: &'a HashSet<usize>,
     pub next_id: usize,
 }
 
-impl Toggles<'_> {
+impl DetailsState<'_> {
     fn take_id(&mut self) -> usize {
         let id = self.next_id;
         self.next_id += 1;
@@ -29,7 +27,7 @@ pub(crate) fn emit_block(
     term: &TermInfo,
     assets: &Assets,
     indent: usize,
-    tg: &mut Toggles,
+    details: &mut DetailsState,
     ops: &mut Vec<RenderOp>,
 ) {
     match block {
@@ -45,7 +43,6 @@ pub(crate) fn emit_block(
                 let eff = indent + avail.saturating_sub(tokens_width(&tokens)) / 2;
                 emit_tokens(&tokens, term.cols as usize, eff, eff, ops);
             } else {
-                // accent bar by level: ┃ for section titles, │ for subsections
                 let accent = if *level == 2 {
                     "┃ "
                 } else if *level == 3 {
@@ -67,11 +64,11 @@ pub(crate) fn emit_block(
             ops.push(RenderOp::LineBreak);
         }
         Block::List { ordered, items } => {
-            emit_list(*ordered, items, "", term, assets, indent, tg, ops);
+            emit_list(*ordered, items, "", term, assets, indent, details, ops);
         }
         Block::Code { src, lang } => emit_code(src, lang.as_deref(), term, indent, ops),
         Block::Art { parts, caption } => {
-            super::art::render(parts, caption, term, assets, indent, tg, ops)
+            super::art::render(parts, caption, term, assets, indent, details, ops)
         }
         Block::BlockTypst { src, width } => {
             commands::typst::render_block(src, *width, term, assets, indent, ops)
@@ -105,12 +102,12 @@ pub(crate) fn emit_block(
         Block::Table { aligns, head, rows } => {
             super::table::render(aligns, head, rows, term, assets, indent, ops);
         }
-        Block::Quote(inner) => emit_quote(inner, term, assets, indent, tg, ops),
+        Block::Quote(inner) => emit_quote(inner, term, assets, indent, details, ops),
         Block::Tree(nodes) => commands::tree::render(nodes, indent, ops),
         Block::Grid(cells) => commands::grid::render(cells, term, indent, ops),
         Block::Details { summary, body } => {
-            let id = tg.take_id();
-            let open = tg.open.contains(&id);
+            let id = details.take_id();
+            let open = details.open.contains(&id);
             commands::details::render(id, open, summary, body, term, assets, indent, ops);
         }
     }
@@ -123,8 +120,6 @@ fn code_label_style() -> Style {
     }
 }
 
-// A fenced code block: the language as a label when the fence names one, then every line on
-// the panel background, padded to the column.
 fn emit_code(
     src: &str,
     lang: Option<&str>,
@@ -148,24 +143,22 @@ fn emit_code(
     }
 }
 
-// A blockquote: a grey background box spanning the content width, one space of
-// inset each side, with a blank row above and below.
 fn emit_quote(
     inner: &[Block],
     term: &TermInfo,
     assets: &Assets,
     indent: usize,
-    tg: &mut Toggles,
+    details: &mut DetailsState,
     ops: &mut Vec<RenderOp>,
 ) {
     let text_w = (term.cols as usize).saturating_sub(indent + 2).max(1);
     let inner_term = term.with_cols(text_w);
     let mut sub = Vec::new();
     for b in inner {
-        emit_block(b, &inner_term, assets, 0, tg, &mut sub);
+        emit_block(b, &inner_term, assets, 0, details, &mut sub);
     }
-    let deco = BoxDeco::shaded(text_w, quote_style());
-    emit_box(split_lines(sub), text_w, indent, &deco, ops);
+    let box_style = BoxStyle::shaded(text_w, quote_style());
+    emit_box(split_lines(sub), text_w, indent, &box_style, ops);
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -176,7 +169,7 @@ fn emit_list(
     term: &TermInfo,
     assets: &Assets,
     indent: usize,
-    tg: &mut Toggles,
+    details: &mut DetailsState,
     ops: &mut Vec<RenderOp>,
 ) {
     for (i, item) in items.iter().enumerate() {
@@ -203,9 +196,9 @@ fn emit_list(
                     ops.push(RenderOp::LineBreak);
                 }
                 Block::List { ordered: o, items } => {
-                    emit_list(*o, items, &item_prefix, term, assets, cont, tg, ops);
+                    emit_list(*o, items, &item_prefix, term, assets, cont, details, ops);
                 }
-                nested => emit_block(nested, term, assets, cont, tg, ops),
+                nested => emit_block(nested, term, assets, cont, details, ops),
             }
         }
     }

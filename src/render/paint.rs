@@ -1,4 +1,3 @@
-// Drawing vocabulary: click targets, render-op helpers, styles, and box rules.
 use crate::assets::Assets;
 use std::path::PathBuf;
 
@@ -14,36 +13,33 @@ pub(crate) fn indent_op(indent: usize) -> RenderOp {
     RenderOp::Text(" ".repeat(indent), Style::default())
 }
 
-// Current cursor row in the body flow: one per line break emitted so far.
 pub(crate) fn current_row(ops: &[RenderOp]) -> usize {
     ops.iter()
         .filter(|o| matches!(o, RenderOp::LineBreak))
         .count()
 }
 
-// Size an image in cells. Natural shrinks to fit the column; Percent/Cols target
-// that width. Width alone sets the scale; the height follows the aspect ratio,
-// and a slide taller than the viewport scrolls.
 pub(crate) fn image_cells(
     dimensions: Option<(u32, u32)>,
     term: &TermInfo,
     indent: usize,
     width: Width,
 ) -> (u16, u16) {
-    let cell_w = term.cell_w_px.max(1) as f32;
-    let cell_h = term.cell_h_px.max(1) as f32;
-    let (w, h) = dimensions.unwrap_or((cell_w as u32, cell_h as u32));
-    let nat_cols = (w as f32 / cell_w).max(1.0);
-    let nat_rows = (h as f32 / cell_h).max(1.0);
-    let content_w = (term.cols as usize).saturating_sub(indent).max(1) as f32;
-    let target_cols = match width {
-        Width::Natural => nat_cols.min(content_w),
-        Width::Percent(p) => content_w * (p as f32 / 100.0),
-        Width::Cols(c) => (c as f32).min(content_w),
+    let cell_width_px = term.cell_w_px.max(1) as f32;
+    let cell_height_px = term.cell_h_px.max(1) as f32;
+    let (image_width_px, image_height_px) =
+        dimensions.unwrap_or((cell_width_px as u32, cell_height_px as u32));
+    let natural_columns = (image_width_px as f32 / cell_width_px).max(1.0);
+    let natural_rows = (image_height_px as f32 / cell_height_px).max(1.0);
+    let content_width = (term.cols as usize).saturating_sub(indent).max(1) as f32;
+    let target_columns = match width {
+        Width::Natural => natural_columns.min(content_width),
+        Width::Percent(p) => content_width * (p as f32 / 100.0),
+        Width::Cols(c) => (c as f32).min(content_width),
     };
-    let scale = target_cols / nat_cols;
-    let cols = (nat_cols * scale).round().max(1.0) as u16;
-    let rows = (nat_rows * scale).round().max(1.0) as u16;
+    let scale = target_columns / natural_columns;
+    let cols = (natural_columns * scale).round().max(1.0) as u16;
+    let rows = (natural_rows * scale).round().max(1.0) as u16;
     (cols, rows)
 }
 
@@ -56,10 +52,10 @@ pub(crate) fn place_image(
     width: Width,
 ) -> (u16, u16) {
     let (cols, rows) = image_cells(assets.dimensions(&png_path), term, indent, width);
-    let content_w = (term.cols as usize).saturating_sub(indent);
-    let slack = content_w.saturating_sub(cols as usize) / 2;
+    let content_width = (term.cols as usize).saturating_sub(indent);
+    let padding_columns = content_width.saturating_sub(cols as usize) / 2;
     for row in 0..rows {
-        ops.push(indent_op(indent + slack));
+        ops.push(indent_op(indent + padding_columns));
         ops.push(RenderOp::ImageRow {
             png_path: png_path.clone(),
             cols,
@@ -85,7 +81,6 @@ pub(crate) fn dim_style() -> Style {
     }
 }
 
-// An image alt line, an art caption: the text under a figure.
 pub(crate) fn caption_style() -> Style {
     Style {
         italic: true,
@@ -107,23 +102,26 @@ pub(crate) fn quote_style() -> Style {
     }
 }
 
-// A horizontal box rule: a left corner, `w` dashes, a right corner.
-pub(crate) fn hrule(left: char, w: usize, right: char) -> String {
-    format!("{left}{}{right}", "─".repeat(w))
+pub(crate) fn hrule(left: char, width: usize, right: char) -> String {
+    format!("{left}{}{right}", "─".repeat(width))
 }
 
-pub(crate) fn pad(s: &str, w: usize, align: Align) -> String {
+pub(crate) fn pad(s: &str, width: usize, align: Align) -> String {
     let len = cell_width(s);
-    if len >= w {
+    if len >= width {
         return s.to_string();
     }
-    let slack = w - len;
+    let padding_columns = width - len;
     match align {
-        Align::Left => format!("{s}{}", " ".repeat(slack)),
-        Align::Right => format!("{}{s}", " ".repeat(slack)),
+        Align::Left => format!("{s}{}", " ".repeat(padding_columns)),
+        Align::Right => format!("{}{s}", " ".repeat(padding_columns)),
         Align::Center => {
-            let left = slack / 2;
-            format!("{}{s}{}", " ".repeat(left), " ".repeat(slack - left))
+            let left = padding_columns / 2;
+            format!(
+                "{}{s}{}",
+                " ".repeat(left),
+                " ".repeat(padding_columns - left)
+            )
         }
     }
 }

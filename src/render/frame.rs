@@ -160,7 +160,6 @@ fn help_overlay(term: &TermInfo) -> Vec<RenderOp> {
     centered_box(term, &styled)
 }
 
-// A centered status box shown while the deck's typst fragments compile.
 pub(crate) fn loading_frame(term: &TermInfo, label: &str) -> Vec<RenderOp> {
     let mut ops = vec![RenderOp::ClearImages];
     ops.extend(centered_box(
@@ -174,7 +173,6 @@ pub(crate) fn loading_frame(term: &TermInfo, label: &str) -> Vec<RenderOp> {
     ops
 }
 
-// A centered gate listing typst compile errors with a yes/no prompt.
 pub(crate) fn error_prompt(term: &TermInfo, errors: &[(usize, String)]) -> Vec<RenderOp> {
     let max_w = (term.cols as usize).saturating_sub(8).max(20);
     let rows = term.rows as usize;

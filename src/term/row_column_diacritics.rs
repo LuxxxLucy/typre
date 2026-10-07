@@ -1,6 +1,4 @@
-// Generated from kitty gen/rowcolumn-diacritics.txt (Unicode 6.0.0, class 230).
-// Index = row/column number; char appended after U+10EEEE to encode it.
-pub const DIACRITICS: [char; 297] = [
+pub const ROW_COLUMN_DIACRITICS: [char; 297] = [
     '\u{0305}',
     '\u{030D}',
     '\u{030E}',

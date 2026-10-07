@@ -3,7 +3,7 @@ use std::fs;
 use std::io::{Cursor, Write};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use anyhow::{ensure, Context, Result};
 use base64::Engine;
@@ -14,8 +14,16 @@ use crossterm::style::{
 use crossterm::{cursor, execute, queue, terminal};
 
 use crate::core::ir::Style;
-use crate::diacritics::DIACRITICS;
+mod row_column_diacritics;
 use crate::layout::{GlowRun, RenderOp, TermInfo};
+use row_column_diacritics::ROW_COLUMN_DIACRITICS;
+
+const IMAGE_CHUNK_BYTES: usize = 4096;
+const PIXEL_SIZE_SAMPLE_LIMIT: usize = 50;
+const PIXEL_SIZE_SAMPLE_INTERVAL: Duration = Duration::from_millis(10);
+const GLOW_STEP_MILLIS: u128 = 100;
+const HUE_STEPS: u32 = 256;
+const HUE_SEGMENT_STEPS: u32 = 43;
 
 pub struct TerminalSession {
     raw: bool,
@@ -62,10 +70,22 @@ struct EncodedImage {
     height: u32,
 }
 
-type PlacementKey = (PathBuf, u16, u16, u16);
+#[derive(Hash, PartialEq, Eq)]
+struct PlacementKey {
+    path: PathBuf,
+    cols: u16,
+    rows: u16,
+    first_row: u16,
+}
+
+#[derive(Hash, PartialEq, Eq)]
+struct EncodingKey {
+    path: PathBuf,
+    minimum_height: u16,
+}
 
 pub struct Emitter {
-    images: HashMap<(PathBuf, u16), Rc<EncodedImage>>,
+    images: HashMap<EncodingKey, Rc<EncodedImage>>,
     image_ids: Vec<u32>,
     next_image_id: u32,
     start: Instant,
@@ -99,20 +119,22 @@ impl Emitter {
     }
 
     fn phase(&self) -> u32 {
-        (self.start.elapsed().as_millis() / 100) as u32
+        (self.start.elapsed().as_millis() / GLOW_STEP_MILLIS) as u32
     }
 }
 
-// Transmit base64 PNG data in <=4096-byte chunks; `first` is the control prefix for
-// chunk 0 (its `,m=...;` and the `\x1b_G` framing are added here).
-fn transmit_chunks(out: &mut impl Write, b64: &str, first: &str) -> Result<()> {
-    let mut chunks = b64.as_bytes().chunks(4096).enumerate().peekable();
+fn transmit_chunks(out: &mut impl Write, encoded_png: &str, first_header: &str) -> Result<()> {
+    let mut chunks = encoded_png
+        .as_bytes()
+        .chunks(IMAGE_CHUNK_BYTES)
+        .enumerate()
+        .peekable();
     while let Some((i, chunk)) = chunks.next() {
-        let m = usize::from(chunks.peek().is_some());
+        let more = usize::from(chunks.peek().is_some());
         if i == 0 {
-            write!(out, "{first},m={m};")?;
+            write!(out, "{first_header},m={more};")?;
         } else {
-            write!(out, "\x1b_Gm={m};")?;
+            write!(out, "\x1b_Gm={more};")?;
         }
         out.write_all(chunk)?;
         out.write_all(b"\x1b\\")?;
@@ -138,28 +160,23 @@ impl TermInfo {
         }
     }
 
-    // Right after startup the reported size can churn (stale or zero) before the
-    // terminal settles, which would rasterize math against a wrong cell. Poll until
-    // two consecutive readings agree, then trust it; take what we have after ~500ms.
     pub fn acquire() -> Self {
-        let mut prev = Self::query();
-        for _ in 0..50 {
-            std::thread::sleep(std::time::Duration::from_millis(10));
-            let cur = Self::query();
-            if (cur.cell_w_px, cur.cell_h_px) == (prev.cell_w_px, prev.cell_h_px) {
-                return cur;
+        let mut previous = Self::query();
+        for _ in 0..PIXEL_SIZE_SAMPLE_LIMIT {
+            std::thread::sleep(PIXEL_SIZE_SAMPLE_INTERVAL);
+            let current = Self::query();
+            if (current.cell_w_px, current.cell_h_px) == (previous.cell_w_px, previous.cell_h_px) {
+                return current;
             }
-            prev = cur;
+            previous = current;
         }
-        prev
+        previous
     }
 }
 
 impl Emitter {
     pub fn emit(&mut self, ops: &[RenderOp], out: &mut impl Write) -> Result<()> {
-        // Placements live for one frame: the id of an image already transmitted in this
-        // frame, keyed by its path and cell size, so the lines of one image share it.
-        let mut placed: HashMap<PlacementKey, u32> = HashMap::new();
+        let mut frame_placements: HashMap<PlacementKey, u32> = HashMap::new();
         let phase = self.phase();
         for op in ops {
             match op {
@@ -167,7 +184,7 @@ impl Emitter {
                 RenderOp::LineBreak => queue!(out, Print("\r\n"))?,
                 RenderOp::Text(t, style) => emit_text(out, t, *style, phase)?,
                 RenderOp::ClearImages => {
-                    placed.clear();
+                    frame_placements.clear();
                     for id in &self.image_ids {
                         write!(out, "\x1b_Ga=d,d=I,i={id},q=2\x1b\\")?;
                     }
@@ -178,9 +195,10 @@ impl Emitter {
                     cols,
                     rows,
                     row,
-                } => self.emit_inline_image(out, png_path, *cols, *rows, *row, &mut placed)?,
+                } => {
+                    self.emit_image_row(out, png_path, *cols, *rows, *row, &mut frame_placements)?
+                }
                 RenderOp::Link { label, url, style } => emit_link(out, label, url, *style, phase)?,
-                // A click target only; it draws nothing.
                 RenderOp::ToggleTarget(_) => {}
             }
         }
@@ -188,8 +206,6 @@ impl Emitter {
         Ok(())
     }
 
-    // Repaint the glowing runs where they stand. Nothing is laid out again and no image is
-    // transmitted, so this is cheap enough to do every tick.
     pub fn paint_glow(&mut self, out: &mut impl Write, runs: &[GlowRun]) -> Result<()> {
         let phase = self.phase();
         for run in runs {
@@ -201,9 +217,6 @@ impl Emitter {
     }
 }
 
-// One glowing run, in the hue the clock is at. Every run reads the same clock, so all the
-// boxes on a slide hold one colour together, and a redraw picks the shimmer up where it
-// stands instead of restarting it.
 fn glow_text(out: &mut impl Write, text: &str, phase: u32) -> Result<()> {
     let (r, g, b) = hue(phase);
     queue!(
@@ -215,18 +228,17 @@ fn glow_text(out: &mut impl Write, text: &str, phase: u32) -> Result<()> {
     Ok(())
 }
 
-// One full turn of hue every 256 steps, at full saturation.
-fn hue(t: u32) -> (u8, u8, u8) {
-    let h = t % 256;
-    let seg = h / 43;
-    let f = ((h % 43) * 255 / 43) as u8;
-    match seg {
-        0 => (255, f, 0),
-        1 => (255 - f, 255, 0),
-        2 => (0, 255, f),
-        3 => (0, 255 - f, 255),
-        4 => (f, 0, 255),
-        _ => (255, 0, 255 - f),
+fn hue(phase: u32) -> (u8, u8, u8) {
+    let hue = phase % HUE_STEPS;
+    let segment = hue / HUE_SEGMENT_STEPS;
+    let channel = ((hue % HUE_SEGMENT_STEPS) * 255 / HUE_SEGMENT_STEPS) as u8;
+    match segment {
+        0 => (255, channel, 0),
+        1 => (255 - channel, 255, 0),
+        2 => (0, 255, channel),
+        3 => (0, 255 - channel, 255),
+        4 => (channel, 0, 255),
+        _ => (255, 0, 255 - channel),
     }
 }
 
@@ -259,7 +271,6 @@ fn emit_text(out: &mut impl Write, text: &str, style: Style, phase: u32) -> Resu
     Ok(())
 }
 
-// OSC 8 hyperlink wrapping the underlined label, so the terminal makes it clickable.
 fn emit_link(out: &mut impl Write, label: &str, url: &str, style: Style, phase: u32) -> Result<()> {
     write!(out, "\x1b]8;;{url}\x1b\\")?;
     emit_text(out, label, style, phase)?;
@@ -269,12 +280,15 @@ fn emit_link(out: &mut impl Write, label: &str, url: &str, style: Style, phase: 
 
 impl Emitter {
     fn encoded_png(&mut self, path: &Path, rows: u16) -> Result<Rc<EncodedImage>> {
-        let expanded_rows = if usize::from(rows) > DIACRITICS.len() {
+        let expanded_rows = if usize::from(rows) > ROW_COLUMN_DIACRITICS.len() {
             rows
         } else {
             0
         };
-        let key = (path.to_owned(), expanded_rows);
+        let key = EncodingKey {
+            path: path.to_owned(),
+            minimum_height: expanded_rows,
+        };
         if let Some(image) = self.images.get(&key) {
             return Ok(Rc::clone(image));
         }
@@ -310,20 +324,25 @@ impl Emitter {
         Ok(image)
     }
 
-    fn emit_inline_image(
+    fn emit_image_row(
         &mut self,
         out: &mut impl Write,
         path: &Path,
         cols: u16,
         rows: u16,
         row: u16,
-        placed: &mut HashMap<PlacementKey, u32>,
+        frame_placements: &mut HashMap<PlacementKey, u32>,
     ) -> Result<()> {
         ensure!(row < rows, "image row exceeds placement height");
-        let start = row / DIACRITICS.len() as u16 * DIACRITICS.len() as u16;
-        let tile_rows = (rows - start).min(DIACRITICS.len() as u16);
-        let key = (path.to_owned(), cols, rows, start);
-        let id = match placed.get(&key) {
+        let start = row / ROW_COLUMN_DIACRITICS.len() as u16 * ROW_COLUMN_DIACRITICS.len() as u16;
+        let tile_rows = (rows - start).min(ROW_COLUMN_DIACRITICS.len() as u16);
+        let key = PlacementKey {
+            path: path.to_owned(),
+            cols,
+            rows,
+            first_row: start,
+        };
+        let id = match frame_placements.get(&key) {
             Some(id) => *id,
             None => {
                 let id = self.image_id();
@@ -333,7 +352,7 @@ impl Emitter {
                 let height = end - y;
                 transmit_chunks(out, &image.data, &format!("\x1b_Gf=100,a=t,t=d,i={id},q=2"))?;
                 write!(out, "\x1b_Ga=p,U=1,i={id},c={cols},r={tile_rows},x=0,y={y},w={},h={height},q=2\x1b\\", image.width)?;
-                placed.insert(key, id);
+                frame_placements.insert(key, id);
                 id
             }
         };
@@ -342,25 +361,17 @@ impl Emitter {
 }
 
 fn emit_placeholder_row(out: &mut impl Write, id: u32, cols: u16, row: u16) -> Result<()> {
-    // The image id must be the cell's 24-bit foreground RGB (id N => 0,0,N). The
-    // 256-color form sets a palette index, a different color, so the placeholder
-    // would bind to the wrong (or no) image.
-    write!(
-        out,
-        "\x1b[38;2;{};{};{}m",
-        (id >> 16) & 0xff,
-        (id >> 8) & 0xff,
-        id & 0xff
-    )?;
-    let row = DIACRITICS
+    let [image_id_extension, red, green, blue] = id.to_be_bytes();
+    write!(out, "\x1b[38;2;{red};{green};{blue}m")?;
+    let row = ROW_COLUMN_DIACRITICS
         .get(row as usize)
         .context("image row exceeds placeholder range")?;
     for c in 0..cols as usize {
-        if let Some(column) = DIACRITICS.get(c) {
+        if let Some(column) = ROW_COLUMN_DIACRITICS.get(c) {
             write!(
                 out,
                 "\u{10EEEE}{row}{column}{}",
-                DIACRITICS[(id >> 24) as usize]
+                ROW_COLUMN_DIACRITICS[image_id_extension as usize]
             )?;
         } else {
             write!(out, "\u{10EEEE}{row}")?;
@@ -422,8 +433,14 @@ mod tests {
         assert!(output.contains("i=1,c=5,r=297,x=0,y=0,w=10,h=297,"));
         assert!(output.contains("i=2,c=5,r=297,x=0,y=297,w=10,h=297,"));
         assert!(output.contains("i=3,c=5,r=6,x=0,y=594,w=10,h=6,"));
-        assert!(output.contains(&format!("\x1b[38;2;0;0;2m\u{10EEEE}{}", DIACRITICS[0])));
-        assert!(output.contains(&format!("\x1b[38;2;0;0;3m\u{10EEEE}{}", DIACRITICS[5])));
+        assert!(output.contains(&format!(
+            "\x1b[38;2;0;0;2m\u{10EEEE}{}",
+            ROW_COLUMN_DIACRITICS[0]
+        )));
+        assert!(output.contains(&format!(
+            "\x1b[38;2;0;0;3m\u{10EEEE}{}",
+            ROW_COLUMN_DIACRITICS[5]
+        )));
     }
 
     #[test]
@@ -480,9 +497,9 @@ mod tests {
         assert!(s.starts_with("\x1b[38;2;0;0;42m"));
         assert!(s.ends_with("\x1b[39m"));
         assert_eq!(s.matches('\u{10EEEE}').count(), 3);
-        assert!(s.contains(DIACRITICS[0]));
-        assert!(s.contains(DIACRITICS[1]));
-        assert!(s.contains(DIACRITICS[2]));
+        assert!(s.contains(ROW_COLUMN_DIACRITICS[0]));
+        assert!(s.contains(ROW_COLUMN_DIACRITICS[1]));
+        assert!(s.contains(ROW_COLUMN_DIACRITICS[2]));
     }
 
     #[test]
@@ -494,7 +511,7 @@ mod tests {
         assert_eq!(cells.len(), 2);
         for cell in cells {
             assert!(
-                cell.starts_with(DIACRITICS[3]),
+                cell.starts_with(ROW_COLUMN_DIACRITICS[3]),
                 "row 3 diacritic leads each cell"
             );
         }

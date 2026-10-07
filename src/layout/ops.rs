@@ -7,8 +7,6 @@ pub enum RenderOp {
     MoveTo(u16, u16),
     Text(String, Style),
     LineBreak,
-    // One placeholder line of a virtual placement `rows` tall: `row` selects the
-    // slice. A table cell emits one op per line so borders stay in the text grid.
     ImageRow {
         png_path: PathBuf,
         cols: u16,
@@ -20,7 +18,6 @@ pub enum RenderOp {
         url: String,
         style: Style,
     },
-    // Zero-width: the row it lands on toggles details box `id` when clicked.
     ToggleTarget(usize),
     ClearImages,
 }
@@ -39,8 +36,6 @@ pub enum HitAction {
     Goto(usize),
 }
 
-// Replay the cursor motion of an op stream: where on screen each op lands. Both the click
-// targets and the glowing runs are read off this, so neither has to track rows itself.
 pub(crate) fn positions(ops: &[RenderOp]) -> impl Iterator<Item = (u16, u16, &RenderOp)> {
     ops.iter().scan((0u16, 0u16), |(row, col), op| {
         let position = (*row, *col, op);
@@ -62,7 +57,6 @@ pub(crate) fn positions(ops: &[RenderOp]) -> impl Iterator<Item = (u16, u16, &Re
     })
 }
 
-// A link's label span, and a details box's summary row, are what a click can land on.
 pub(crate) fn hits(ops: &[RenderOp]) -> Vec<Hit> {
     positions(ops)
         .filter_map(|(row, col, op)| match op {
@@ -81,8 +75,6 @@ pub(crate) fn hits(ops: &[RenderOp]) -> Vec<Hit> {
         .collect()
 }
 
-// One run of glowing text and where it sits, so a frame can be recoloured in place without
-// laying the slide out again or transmitting its images a second time.
 pub struct GlowRun {
     pub row: u16,
     pub col: u16,
