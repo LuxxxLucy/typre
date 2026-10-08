@@ -65,9 +65,7 @@ For scripting and tests, without an interactive terminal:
 - `typre --dump-ops <deck>` prints the parsed slides and the render operations.
 - `typre --export <deck> [-o FILE]` runs the full pipeline, including typst rasterization, and writes the terminal byte stream.
 
-## Library structure
-
-The library separates document meaning, asset preparation, layout, and terminal output.
+### Codebase structure
 
 | Module | Responsibility |
 | --- | --- |
@@ -78,14 +76,7 @@ The library separates document meaning, asset preparation, layout, and terminal 
 | `term` | Encode drawing operations; own terminal images and session cleanup. |
 | `app` | Handle input, navigation, file changes, and redraw decisions. |
 
-Command parsers depend only on document types.
-Feature renderers share text, row, and box operations.
-Scrolling selects rows from the current layout.
-File changes invalidate prepared assets; successful downloads refresh the current layout.
-
 `examples/render.rs` is a complete rendering example.
-Run `cargo test` for command-line export, error reporting, and interactive presentation checks.
 
 The image placeholder table follows [Kitty’s row and column encoding](https://github.com/kovidgoyal/kitty/blob/master/gen/rowcolumn-diacritics.txt).
-It uses Unicode 6.0.0 combining characters from class 230.
 Terminal image commands follow the [Kitty graphics protocol](https://sw.kovidgoyal.net/kitty/graphics-protocol/).
